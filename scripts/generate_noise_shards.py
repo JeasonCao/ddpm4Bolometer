@@ -1,24 +1,33 @@
 """
-Generate 100K noise windows in 10 shards of 10K each.
+Generate noise windows in shards.
 
 Usage:
-    python -u scripts/generate_noise_shards.py
+    python -u scripts/generate_noise_shards.py --output_dir /path/to/noise
+    python -u scripts/generate_noise_shards.py --output_dir /path/to/noise --n_shards 1 --windows_per_shard 500
 """
 
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import argparse
 import time
 import h5py
 import numpy as np
 
 from src.noise.generator import generate_noise, sample_noise_params
 
-OUTPUT_DIR = '/media/AVFD/yunshancheng/cuore/noise'
-N_SHARDS = 10
-WINDOWS_PER_SHARD = 10000
-BASE_SEED = 7777
+parser = argparse.ArgumentParser(description="Generate noise shards")
+parser.add_argument('--output_dir', type=str, default='/home/wsl_0vbb/DDPM4bolometer/simu_data/noise')
+parser.add_argument('--n_shards', type=int, default=10)
+parser.add_argument('--windows_per_shard', type=int, default=10000)
+parser.add_argument('--base_seed', type=int, default=7777)
+args = parser.parse_args()
+
+OUTPUT_DIR = args.output_dir
+N_SHARDS = args.n_shards
+WINDOWS_PER_SHARD = args.windows_per_shard
+BASE_SEED = args.base_seed
 DURATION = 10.0
 F_SAMPLE = 1000.0
 
@@ -90,6 +99,7 @@ def generate_noise_shard(n_windows, output_file, seed):
 
 
 if __name__ == '__main__':
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     for shard in range(N_SHARDS):
         output_file = os.path.join(OUTPUT_DIR, f'noise_{shard:03d}.h5')
         if os.path.exists(output_file):
