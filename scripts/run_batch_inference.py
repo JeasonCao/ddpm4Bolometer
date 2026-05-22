@@ -40,7 +40,7 @@ def load_model(model_path: str, device: torch.device,
                scale_cond: bool = False,
                T: int = 50, beta_1: float = 1e-4, beta_T: float = 0.05,
                cond_mode: str = 'step'):
-    schedule = DiffusionSchedule(T=T, beta_1=beta_1, beta_T=beta_T, device=device)
+    schedule = DiffusionSchedule(T=T, beta_1=beta_1, beta_T=beta_T).to(device)
     model_cls = UNet1DScaleCond if scale_cond else UNet1D
     model = model_cls(cond_mode=cond_mode).to(device)
     state = torch.load(model_path, map_location=device)
