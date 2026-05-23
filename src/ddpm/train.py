@@ -38,9 +38,9 @@ def main():
     parser.add_argument('--T', type=int, default=50)
     parser.add_argument('--beta_1', type=float, default=1e-4,
                         help='Starting beta of the quadratic noise schedule (default: 1e-4)')
-    parser.add_argument('--beta_T', type=float, default=0.05,
-                        help='Ending beta of the quadratic noise schedule (default: 0.05). '
-                             'DeScoD-ECG uses 0.5; larger values drive alpha_bar_T closer to 0.')
+    parser.add_argument('--beta_T', type=float, default=0.5,
+                        help='Ending beta of the quadratic noise schedule (default: 0.5, '
+                             'DeScoD-ECG style — drives alpha_bar_T close to 0).')
     parser.add_argument('--cond_mode', type=str, default='step',
                         choices=['step', 'sqrt_ab'],
                         help='Diffusion conditioning: discrete step index (default) or '

@@ -1,8 +1,8 @@
 """
-TEMP debug script — investigate pileup windows where biexp fitting fails.
+TEMP debug script — investigate pileup windows where tri-exp fitting fails.
 
 Runs DDPM inference on a handful of pileup samples, fits clean/noisy/1-shot/
-10-shot with biexp_double, flags any fit that (a) raised in curve_fit or
+10-shot with triexp_double, flags any fit that (a) raised in curve_fit or
 (b) rail-pinned a tau bound, and plots data+fit overlay for the bad windows.
 Prints best-fit params, the parameter bounds, and chi2/ndf to stdout.
 
@@ -33,7 +33,7 @@ from src.ddpm.unet import UNet1D
 from src.ddpm.diffusion import GaussianDiffusion
 from src.ddpm.dataset import PulseNoiseDataset
 from src.basics.fit import (
-    fit_pulse, biexp_single, biexp_double,
+    fit_pulse, triexp_single, triexp_double,
     _TAU_R_MIN, _TAU_R_MAX, _TAU_D_MIN, _TAU_D_MAX,
 )
 
@@ -182,7 +182,7 @@ def main():
             sig = e['signals'][src]
             fr = e['fits'][src]
             ax.plot(t, sig * 1e3, 'k-', lw=0.5, alpha=0.7, label='data')
-            fit_curve = biexp_double(t, *fr.params)
+            fit_curve = triexp_double(t, *fr.params)
             is_bad, why = (False, '')
             if src in e['bad']:
                 is_bad, why = e['bad'][src]

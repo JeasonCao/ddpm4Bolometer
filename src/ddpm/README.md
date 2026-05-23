@@ -16,7 +16,7 @@ A conditional DDPM trained on paired (clean, noisy) data:
 
 ### Diffusion Process
 
-- **Forward**: Gradually adds Gaussian noise to clean signal x_0 over T steps using a quadratic beta schedule. Defaults are `T=50`, `beta_1=1e-4`, `beta_T=0.05`, but all three are CLI options (`--T`, `--beta_1`, `--beta_T`). Larger `beta_T` drives `alpha_bar_T` closer to zero so that x_T is a true standard Gaussian. With the default 0.05, `alpha_bar_T ≈ 0.41` — x_T retains ~40% signal, so there is a train/inference mismatch at step T (training sees signal+noise, sampling starts from pure N(0, I)). DeScoD-ECG uses `beta_T=0.5` to eliminate this gap.
+- **Forward**: Gradually adds Gaussian noise to clean signal x_0 over T steps using a quadratic beta schedule. Defaults are `T=50`, `beta_1=1e-4`, `beta_T=0.5` (DeScoD-ECG style), but all three are CLI options (`--T`, `--beta_1`, `--beta_T`). With `beta_T=0.5`, `alpha_bar_T ≈ 5e-5` — x_T is effectively a standard Gaussian, eliminating the train/inference mismatch at step T (training and sampling both see ~pure noise). The earlier default of `beta_T=0.05` left `alpha_bar_T ≈ 0.41`, retaining ~40% of the clean signal at step T.
 - **Reverse**: Starting from pure Gaussian noise, iteratively denoises conditioned on the noisy observation x_tilde (concatenated as a second input channel).
 - **Training objective**: Predict the noise epsilon added at each timestep. Base loss is L1 or L2 on the noise prediction, with optional spectral losses on the implied clean estimate x̂_0 (see Loss Functions below).
 - **Timestep / noise-level conditioning** (`--cond_mode`):
@@ -99,15 +99,67 @@ Start with `--w_sc 0.1 --w_asd 0.1` and adjust. The spectral losses have differe
 
 ```
 src/ddpm/
-  unet.py           - 1D U-Net model (UNet1D)
-  unet_cond.py      - Scale-conditioned U-Net (UNet1DScaleCond)
-  schedule.py       - Quadratic noise schedule (beta, alpha, alpha_bar)
-  diffusion.py      - Forward/reverse diffusion, training loss, sampling
-  dataset.py        - HDF5 dataset with on-the-fly clean+noise pairing
-  spectral_loss.py  - SC, LSD, J_asd spectral loss functions
-  train.py          - Training loop with checkpointing and resume support
-  inference.py      - Single/multi-shot inference with metrics and plots
+  unet.py             - 1D U-Net model (UNet1D)
+  unet_cond.py        - Scale-conditioned U-Net (UNet1DScaleCond)
+  schedule.py         - Quadratic noise schedule (beta, alpha, alpha_bar)
+  diffusion.py        - Forward/reverse diffusion, training loss, sampling
+  dataset.py          - HDF5 dataset with on-the-fly clean+noise pairing
+  spectral_loss.py    - SC, LSD, J_asd spectral loss functions
+  preprocess_index.py - Precompute per-shard category index JSONs
+  train.py            - Training loop with checkpointing and resume support
+  inference.py        - Single/multi-shot inference with metrics and plots
 ```
+
+### Module reference
+
+- **`schedule.py`** — `DiffusionSchedule(T, beta_1, beta_T)`: precomputes the
+  quadratic beta schedule and derived constants `alpha`, `alpha_bar`,
+  `sqrt_alpha_bar`, `sqrt_one_minus_alpha_bar`. `beta_t` interpolates linearly
+  in `sqrt(beta)` space, then is squared and clamped to `[1e-8, 0.999]`.
+
+- **`unet.py`** — `UNet1D`: 1D U-Net (~15.1M params) with 4 encoder levels
+  (64→128→256→512), 2 ResBlocks/level, GroupNorm + SiLU, self-attention at
+  level 3 and the bottleneck. Conditioning embedding (`step` or `sqrt_ab`) is
+  added inside every ResBlock. Input is `[x_t, x_tilde]` (2 channels), output
+  is the predicted noise `eps` (1 channel).
+
+- **`unet_cond.py`** — `UNet1DScaleCond`: identical to `UNet1D` plus a
+  log-scale conditioning branch. The per-window normalization scale
+  `max(|noisy|)` is encoded as `log(scale)*10 → SinusoidalEmbedding → MLP`
+  and added into the timestep embedding so the network knows the input SNR.
+
+- **`diffusion.py`** — `GaussianDiffusion(model, schedule, loss_type,
+  spectral_loss, cond_mode)`: forward `q(x_t|x_0)`, training loss (noise MSE
+  / L1 with optional spectral terms on the Tweedie x̂_0), DDPM ancestral
+  sampler, and DDIM sampler with `eta` and configurable step skipping.
+
+- **`dataset.py`** — `PulseNoiseDataset(clean_dir, noise_dir, subset=None)`:
+  thread-safe lazy HDF5 reader. Pairs clean window `i` with noise window
+  `random(i)` reshuffled each epoch; returns `(x_clean, x_noisy)` of shape
+  `(1, 10000)`. `subset='pileup'`, `'low_100'`, etc. filters to indices
+  from the precomputed `*_index.json` (built by `preprocess_index.py`).
+
+- **`spectral_loss.py`** — multi-resolution STFT helpers and three spectral
+  losses (`SC`, `LSD`, `J_asd`) used on the Tweedie estimate `x̂_0` during
+  training.
+
+- **`preprocess_index.py`** — walks each `clean_XXX.h5` and writes a sibling
+  `clean_XXX_index.json` grouping sample indices by category
+  (`all`, `single`, `pileup`, `low_100`, `low_200`, `pileup_low_100`,
+  `pileup_low_200`). Required if `--subset` / `--filter` is used at
+  train/inference.
+
+- **`train.py`** — training entry point. Builds dataset, splits train/val,
+  configures U-Net + schedule + diffusion wrapper, runs the loop with cosine
+  LR schedule, checkpointing every N epochs, best-val checkpointing, and
+  resume support. Saves `config.json`, `history.json`, periodic
+  `checkpoint_*.pt`, and `best_model.pt` into `--output_dir`.
+
+- **`inference.py`** — inference + QA entry point. Runs DDPM (multi-shot)
+  or DDIM (deterministic) sampling, computes the full metric set
+  (time-domain + spectral + tri-exp peak fits), and writes per-window QA
+  panels, scatter-vs-SNR grids, and a stripped pickle of metric dicts for
+  downstream replotting.
 
 ## Data Format
 
@@ -295,20 +347,22 @@ Time-domain:
 - **PRD**: Percentage root-mean-square difference
 - **Cosine Similarity**: Waveform shape agreement
 - **CC**: Normalized cross-correlation (mean-subtracted)
-- **SNR**: Signal-to-noise ratio in dB
+- **SNR**: Signal-to-noise ratio in dB — `10·log10(Σ clean² / Σ (clean - denoised)²)` (uses total signal energy)
+- **PSNR**: Peak signal-to-noise ratio in dB — `10·log10(max(|clean|)² / MSE)`. References error against the *peak* pulse amplitude rather than total energy, so it tracks how clean the pulse peak is relative to residual noise floor (more interpretable than SNR for sparse, peak-dominated bolometer pulses).
 
 Spectral:
 - **SC**: Spectral Convergence — STFT magnitude error (partially phase-aware)
 - **LSD**: Log-Spectral Distance — RMS log-PSD difference
 - **J_asd**: ASD ratio — mean sqrt(PSD_residual / PSD_target)
 
-Peak analysis:
-- Peak selection: `scipy.signal.find_peaks` detects candidates, ranked by **prominence** (not absolute height) to correctly identify real peaks over noise ripples on decay slopes. Top N peaks are selected (N=1 for single, N=2 for pileup).
-- Peak measurement: parabolic interpolation on the 3 samples around each selected peak for sub-sample precision in both position and amplitude.
-- **Pk amp**: Reconstructed peak amplitude in mV
-- **Pk amp%**: Relative amplitude error vs clean signal
-- **Pk dt ms**: Peak timing error in ms (signal - clean)
-- For pileup events, both peaks (Pk1, Pk2) are reported separately. Peaks are ordered by time (first = earliest) and matched between clean and denoised signals by nearest position.
+Peak analysis (`src/basics/fit.py`):
+- **Model**: tri-exponential pulse (Carrettoni & Vignati 2011) — one rise + a fast/slow decay mixture: `phi(u) = -exp(-u/τ_r) + α·exp(-u/τ_d1) + (1-α)·exp(-u/τ_d2)`. The two-decay form matches the bolometer thermal response (fast electron-phonon relaxation + slow phonon escape); a single-decay biexponential underfits and biases χ²/ndf.
+- **Constraints** (matched to QA convention): baseline B fixed = mean of first 1500 samples, first-pulse onset t01 fixed = 1.5 s, pileup separation t02 ∈ [t01+0.01, t01+2.0] s.
+- **Pileup parametrization**: the two pulses share (τ_r, τ_d1, τ_d2) — one detector, one thermal response — but each gets its own (A, α). 10 model params total (8 free).
+- **Initial guess**: `scipy.signal.find_peaks` on a Gaussian-smoothed signal, ranked by **prominence** to ignore ripples on the decay slope, with parabolic sub-sample refinement.
+- **Peak amplitude / time**: derived from the fit — `peak_amp = A · max(phi)` and `peak_time = t0 + argmax(phi)`, both computed numerically per pulse since the tri-exp shape has no closed-form peak.
+- **χ²/ndf**: plain `SSR / (N − len(popt))`, unweighted. Same value across (clean, noisy, 1-shot, 10-shot) is comparable.
+- **Reported metrics**: `Pk amp` (mV), `Pk amp%` (relative error vs clean), `Pk dt ms` (timing error vs clean). Pileup pulses are sorted by peak time and matched between clean and denoised by index.
 
 ### QA Plot Layout
 
@@ -317,6 +371,216 @@ The inference QA plot has 4 columns per sample:
 2. **Residuals**: Clean minus denoised (1-shot and 10-shot)
 3. **PSD**: Power spectral density comparing clean, noisy, and 10-shot denoised
 4. **Metrics**: Per-sample metrics table with all numeric results
+
+## CLI Reference
+
+### `train.py` arguments
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--clean_dir` | required | Path to a clean shard file (`clean_XXX.h5`) or a directory containing `clean_*.h5`. Directory loads all shards. |
+| `--noise_dir` | required | Same convention for noise shards (`noise_*.h5`). |
+| `--output_dir` | required | Where to write `config.json`, `history.json`, `checkpoint_*.pt`, `best_model.pt`. Created if missing. |
+| `--epochs` | 100 | Total epochs to run. On resume, this is the *final* target epoch (not "more epochs"). |
+| `--batch_size` | 16 | Mini-batch size for the train DataLoader. Val uses the same. |
+| `--lr` | 2e-4 | Peak learning rate. Cosine-decayed to `1e-7` across the (remaining) epochs. No warm-up. |
+| `--T` | 50 | Number of diffusion steps in the forward/reverse process. |
+| `--beta_1` | 1e-4 | Starting beta of the quadratic noise schedule. |
+| `--beta_T` | 0.5 | Ending beta of the quadratic noise schedule. With 0.5, `alpha_bar_T ≈ 5e-5` (effectively standard Gaussian). |
+| `--cond_mode` | `step` | `step` = condition on integer step index 1..T (sinusoidal embed). `sqrt_ab` = continuous `√ᾱ` conditioning (WaveGrad / DeScoD-ECG). Existing checkpoints use `step`. |
+| `--cond_scale` | 1000.0 | Multiplier applied to `√ᾱ` before its sinusoidal embedding, so `(0, 1]` spans the frequency grid. Ignored when `cond_mode='step'`. |
+| `--val_fraction` | 0.1 | Fraction of the dataset used for validation (random split, seeded). |
+| `--save_every` | 10 | Save `checkpoint_<epoch>.pt` every N epochs (in addition to `best_model.pt`). |
+| `--seed` | 42 | RNG seed for torch, the train/val split, and the dataset's per-epoch noise reshuffle. |
+| `--num_workers` | 0 | DataLoader workers. 4 is a good default on a single GPU. |
+| `--loss` | `l2` | Base noise-prediction loss: `l1` (sharper edges) or `l2` (smoother). |
+| `--w_l1` | 0.0 | Extra L1 weight on x̂_0 (time-domain signal). 0 disables. |
+| `--w_sc` | 0.0 | Multi-resolution Spectral Convergence weight on x̂_0. 0 disables. |
+| `--w_lsd` | 0.0 | Log-Spectral Distance weight on x̂_0. 0 disables. |
+| `--w_asd` | 0.0 | J_asd (ASD ratio, DeepClean / CUORE metric) weight on x̂_0. 0 disables. |
+| `--resume` | None | Path to a `checkpoint_*.pt` (or `best_model.pt`) to resume from. Restores model, optimizer, epoch, and `best_val_loss`. Cosine LR is rebuilt for the remaining epochs starting at `--lr` (no warm-up). |
+| `--amp` | False | Enable mixed-precision (float16) training via `torch.cuda.amp`. |
+| `--compile` | False | Wrap the U-Net in `torch.compile` for kernel fusion (slower first epoch). |
+| `--scale_cond` | False | Use `UNet1DScaleCond` instead of `UNet1D` (adds log-scale conditioning). Must match at inference. |
+| `--subset` | None | Filter the training set to a category from the precomputed `_index.json`: `pileup`, `single`, `low_100`, `low_200`, `pileup_low_100`, `pileup_low_200`, or custom. Requires `preprocess_index.py` first. |
+
+### `inference.py` arguments
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--model_path` | required | Path to `best_model.pt` / `checkpoint_*.pt`. The sibling `config.json` is *not* read; pass schedule/cond flags manually. |
+| `--clean_dir` | required | A clean shard file *or* directory (same convention as training). |
+| `--noise_dir` | required | A noise shard file *or* directory. |
+| `--output` | `qa_inference.png` | Per-window QA panel (waveforms / residuals / PSD / metrics). One row per sample, up to `--n_plot`. |
+| `--n` | 200 | Number of samples to process for metric statistics (scatter / pickle). |
+| `--n_plot` | 10 | Number of samples drawn in the QA panel (must be `≤ n`). |
+| `--scatter_output` | None | If set, write a metric-vs-SNR scatter grid here. |
+| `--scatter_pileup_output` | None | If set, write the pileup-vs-single scatter grid here. |
+| `--results_pkl` | None | If set, dump stripped per-window metric dicts here for `scripts/replot_scatter.py` (no waveforms — small file). |
+| `--T` | 50 | Diffusion steps. Must match the schedule the model was trained on. |
+| `--beta_1` | 1e-4 | Starting beta. **Must match training.** |
+| `--beta_T` | 0.5 | Ending beta. **Must match training.** |
+| `--cond_mode` | `step` | Conditioning mode. **Must match training.** |
+| `--cond_scale` | 1000.0 | `√ᾱ` multiplier. **Must match training** (ignored in `step` mode). |
+| `--seed` | 123 | Selection seed for samples (when `--indices` is not given) and the reverse-process noise seed. |
+| `--indices` | None | Comma-separated explicit sample indices (e.g. `23,31,33`). Overrides `--n` and `--seed`-driven random selection. |
+| `--filter` | None | Restrict samples to a category. Built-in: `pileup`, `single`, `low_pileup` (= `pileup_low_100`). With `*_index.json`: `low_100`, `low_200`, `pileup_low_200`, plus any custom category. |
+| `--scale_cond` | False | Use `UNet1DScaleCond`. **Must match training.** |
+| `--aggregation` | `mean` | Multi-shot reducer: `mean` or `median` (median is more robust to outlier samples). |
+| `--sampler` | `ddpm` | `ddpm` = stochastic ancestral sampler (multi-shot averaging is the recommended mode). `ddim` = deterministic. |
+| `--ddim_steps` | None | Number of DDIM steps (skip-by-K). `None` = use full `T`. |
+| `--eta` | 0.0 | DDIM stochasticity: 0 = deterministic, 1 = DDPM-equivalent. Ignored when `--sampler ddpm`. |
+| `--no_noise` | False | Deterministic DDPM: drop the per-step noise term in the reverse process. Useful for paired before/after comparisons. |
+
+## Scripts (`scripts/`)
+
+Two groups: data generation (clean + noise shards) and post-training
+analysis / paper figures. Most analysis scripts work on a single
+"denoised test" HDF5 emitted by `denoise_test_set.py`, so they need no
+GPU and re-run in seconds.
+
+### Data generation
+
+- **`generate_clean_shards.py`** — drives `src.pulse.generate.generate_dataset`
+  to produce simulated clean shards.
+  - `--output_dir` (required): destination directory.
+  - `--n_shards` (10): number of `clean_NNN.h5` shards.
+  - `--windows_per_shard` (10000): windows per shard.
+  - `--base_seed` (42): RNG seed; shard `k` uses `base_seed + 1000*k`.
+  - `--E_min` (1.0) / `--E_max` (5407.0): energy range in keV.
+  - `--pileup_fraction` (0.3): fraction of windows that are two-pulse pileups.
+
+- **`generate_noise_shards.py`** — generates three paired noise families
+  (`noise_periodic/`, `noise_white/`, `noise_total/`). For each window
+  `i` of shard `NNN`, the three folders contain the matched
+  periodic / white / mixed components plus the per-window mix metadata
+  (`alpha`, `beta`, `r=α²`, `scale`) used by downstream
+  metrics-vs-mix scripts.
+  - `--output_dir`: root for the three subdirs (default
+    `/media/Disk_YIN/yunshancheng/cuore/noise_v2`).
+  - `--split` (''): optional subdir under each of `noise_*/` (e.g. `test`).
+  - `--n_shards` (10), `--windows_per_shard` (10000), `--base_seed` (7777):
+    same semantics as for clean shards.
+
+### Post-training analysis pipeline
+
+Run `denoise_test_set.py` once, then point the plotting / metrics
+scripts at the resulting HDF5.
+
+- **`denoise_test_set.py`** — deterministic 1-shot DDPM over the paired
+  test set (`clean[i] ↔ noise[i]`, no permutation). Writes a single
+  HDF5 mirroring the clean/noise layout: `waveforms` (denoised),
+  `waveforms_clean`, `waveforms_noisy`, `scale`, plus copies of
+  per-window detector params, equilibrium state, noise params, and the
+  `noise/mix/{alpha, beta, r, scale}` metadata.
+  - `--clean_h5` (required), `--noise_h5` (required, must contain
+    `/mix/`), `--model_path` (required), `--output` (required H5 path).
+  - `--T` (50), `--beta_1` (1e-4), `--beta_T` (0.5), `--cond_mode`
+    (`step`): must match the training schedule of `--model_path`.
+  - `--batch_size` (64): inference batch size.
+  - `--n_limit` (None): stop after this many windows; default processes
+    everything in the file.
+
+- **`plot_denoising_paper.py`** — 4-row paper figure (single low/high
+  amplitude, pileup low/high amplitude) read directly from the denoised
+  HDF5. Left column: time-domain waveform overlay. Right column:
+  observation / noise / clean / denoised PSDs **plus a
+  denoised-baseline trace** computed over the 0–1.5 s pre-pulse window —
+  this isolates the residual noise floor of the denoiser without the
+  pulse dominating the spectrum.
+  - `--denoised_h5`: input from `denoise_test_set.py`.
+  - `--out`: output PDF/PNG path.
+
+- **`plot_metrics_vs_mix.py`** — scatters per-window metrics against
+  the noise-mix periodic-energy fraction `r = α²` so you can see
+  whether the denoiser degrades more in white-dominated or
+  structured-dominated noise.
+  - `--denoised_h5` (required): denoised test HDF5.
+  - `--n` (500): random subset size for the scatter.
+  - `--seed` (0): subset RNG.
+  - `--out_pkl` (required): pickle of per-window metric dicts.
+  - `--out_png` (required): output figure.
+  - `--title_suffix` (''): appended to each subplot title.
+
+- **`plot_metrics_profile.py`** — reads the pickle from
+  `plot_metrics_vs_mix.py` and converts the scatter into a binned
+  mean ± SEM profile vs `r` (no re-inference, no re-fit).
+  - `--results_pkl` (required): pickle from the scatter script.
+  - `--out_png` (required).
+  - `--n_bins` (10): equal-width bins over `r ∈ [0, 1]`.
+  - `--min_count` (5): bins below this count get NaN'd out.
+  - `--title_suffix` (''): appended to each subplot title.
+
+- **`replot_scatter.py`** — re-renders the inference scatter grids from
+  the small pickle produced by `inference.py --results_pkl`. Iterate on
+  styling without re-running inference. Supports two x-axes (noisy SNR
+  or clean peak amplitude in mV).
+  - `--results_pkl` (required).
+  - `--scatter_output` / `--scatter_pileup_output`: SNR-axis grids.
+  - `--scatter_output_vs_amp` / `--scatter_pileup_output_vs_amp`:
+    clean-peak-amplitude-axis grids. Any subset of the four outputs
+    may be requested per run.
+
+### Model comparison + debugging
+
+- **`compare_models_pileup_qa.py`** — side-by-side QA of two DDPM
+  checkpoints on the same deterministic 1-shot pileup samples. Reads
+  each model's training schedule (`beta_1`, `beta_T`, `cond_mode`) from
+  its sibling `config.json`, so reverse processes match training. Both
+  models share the same initial `x_T` per sample (controlled by
+  `--init_seed`) — differences come only from weights and schedule.
+  - `--model_a` / `--model_b` (required), `--label_a` / `--label_b`:
+    legend labels.
+  - `--clean_dir`, `--noise_dir`, `--output` (required).
+  - `--n_pileup` (30): number of pileup samples drawn.
+  - `--T` (50): inference steps for both models.
+  - `--seed` (2026): selection seed for which pileup indices to draw
+    (matches `debug_pileup_fit_fail.py` so the same windows can be
+    cross-referenced).
+  - `--init_seed` (12345): seed for initial `x_T`, shared across both
+    models per sample.
+  - `--highlight`: indices to mark as user-flagged in the figure.
+
+- **`compare_models_focus.py`** — slimmer twin of the above for a small
+  hand-picked list of indices, plotted at large size so jitter / dip
+  features are visible.
+  - `--model_a` / `--model_b` / `--label_a` / `--label_b`,
+    `--clean_dir`, `--noise_dir`, `--output` (required).
+  - `--indices` (required, `nargs='+'`): exact window indices to plot.
+  - `--T` (50), `--init_seed` (12345): same meaning as above.
+
+- **`debug_pileup_fit_fail.py`** — runs DDPM inference on a handful of
+  pileup samples, fits clean / noisy / 1-shot / 10-shot with
+  `triexp_double`, and flags any fit that raised in `curve_fit` or
+  pinned a rail (τ bound). Plots data+fit overlays for the bad windows
+  and prints params, bounds, and χ²/ndf.
+  - `--model_path`, `--clean_dir`, `--noise_dir` (required).
+  - `--output` (default `/tmp/pileup_fit_fail.png`).
+  - `--n_pileup` (30): how many pileup samples to inspect.
+  - `--T` (50), `--seed` (2026): inference + sample-selection seed.
+  - `--no_noise`: deterministic DDPM (skip per-step noise).
+
+- **`qa_triggers.py`** — QA comparison of `easytrigger` (fixed baseline)
+  vs `trigger` (adaptive rolling) on a single IETI `.bin` file. No CLI
+  arguments — the input path and constants are set at the top of the
+  file. Emits two PNGs, each with 10 triggered windows.
+
+### Standalone paper figures
+
+- **`plot_trajectory_paper.py`** — renders DDPM reverse-diffusion
+  trajectory snapshots (noisy + T=50, 30, 29, 0) for a single ~40 mV
+  non-pileup pulse as five bare-axes PNGs.
+  - `--model_path`, `--clean_h5`, `--noise_h5`: paths (sensible defaults
+    in-file).
+  - `--clean_idx` (1364), `--noise_idx` (0): index pair to use.
+  - `--T` (50), `--seed` (0): inference settings.
+  - `--out_dir`: output directory for the five PNGs.
+
+- **`plot_datasets_paper.py`** — 4×2 overview figure of the simulation
+  datasets (single / pileup × low / high energy), each row in time
+  domain + PSD with clean / noisy / pure-noise overlaid.
+  - `--seed` (0): index selection RNG.
+  - `--out`: output figure path.
 
 ## References
 

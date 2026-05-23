@@ -1,71 +1,45 @@
 """
-Generate 100K noise windows in 10 shards of 10K each.
+Generate paired noise windows: periodic-only, white-only, and total
+(combined with random energy mix and overall scale).
+
+Output layout
+-------------
+    OUTPUT_DIR/
+      noise_periodic/noise_NNN.h5   # AC + PT + resonances, RMS = target_rms
+      noise_white/noise_NNN.h5      # colored + white floor, RMS = target_rms
+      noise_total/noise_NNN.h5      # scale * (alpha*P + beta*W) + meta arrays
+
+Per-window indexing is matched across the three folders: window i of
+shard NNN in noise_periodic and the same in noise_white combine, with
+that window's metadata, into the same window of noise_total.
 
 Usage:
     python -u scripts/generate_noise_shards.py
 """
 
-import sys
+import argparse
 import os
+import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
+
 import h5py
 import numpy as np
 
-from src.noise.generator import generate_noise, sample_noise_params
+from src.noise.generator import (
+    generate_paired_noise,
+    sample_noise_params,
+)
 
-OUTPUT_DIR = '/media/AVFD/yunshancheng/cuore/noise'
-N_SHARDS = 10
-WINDOWS_PER_SHARD = 10000
-BASE_SEED = 7777
 DURATION = 10.0
 F_SAMPLE = 1000.0
 
 
-def generate_noise_shard(n_windows, output_file, seed):
-    rng = np.random.default_rng(seed)
-    n_samples = int(DURATION * F_SAMPLE)
-
-    waveforms = np.zeros((n_windows, n_samples), dtype=np.float64)
-
-    # Store key noise parameters per window
-    par_target_rms = np.zeros(n_windows)
-    par_alpha = np.zeros(n_windows)
-    par_f_cross = np.zeros(n_windows)
-    par_ac_a_base = np.zeros(n_windows)
-    par_pt_a_base = np.zeros(n_windows)
-    par_white_rms = np.zeros(n_windows)
-    par_envelope_var = np.zeros(n_windows)
-    par_n_resonances = np.zeros(n_windows, dtype=int)
-
-    t_start = time.time()
-
-    for i in range(n_windows):
-        params = sample_noise_params(rng)
-        noise = generate_noise(rng, params,
-                               duration=DURATION, f_sample=F_SAMPLE)
-        waveforms[i] = noise
-
-        par_target_rms[i] = params['target_rms']
-        par_alpha[i] = params['alpha']
-        par_f_cross[i] = params['f_cross']
-        par_ac_a_base[i] = params['ac_a_base']
-        par_pt_a_base[i] = params['pt_a_base']
-        par_white_rms[i] = params['white_rms']
-        par_envelope_var[i] = params['envelope_variation']
-        par_n_resonances[i] = len(params['resonances'])
-
-        if (i + 1) % 100 == 0 or i == 0:
-            elapsed = time.time() - t_start
-            rate = (i + 1) / elapsed
-            eta = (n_windows - i - 1) / rate if rate > 0 else 0
-            print(f"  [{i+1}/{n_windows}] "
-                  f"({rate:.1f} windows/s, ETA {eta:.0f}s)")
-
-    # Save
-    print(f"Saving to {output_file} ...")
-    with h5py.File(output_file, 'w') as f:
+def _write_shard(path, waveforms, params_dict, mix_meta=None, *, seed):
+    """Write one H5 shard. mix_meta (alpha/beta/r/scale arrays) only for total."""
+    n_windows, n_samples = waveforms.shape
+    with h5py.File(path, 'w') as f:
         f.attrs['f_sample'] = F_SAMPLE
         f.attrs['duration'] = DURATION
         f.attrs['n_samples'] = n_samples
@@ -75,33 +49,142 @@ def generate_noise_shard(n_windows, output_file, seed):
         f.create_dataset('waveforms', data=waveforms, compression='gzip')
 
         grp = f.create_group('params')
-        grp.create_dataset('target_rms', data=par_target_rms)
-        grp.create_dataset('alpha', data=par_alpha)
-        grp.create_dataset('f_cross', data=par_f_cross)
-        grp.create_dataset('ac_a_base', data=par_ac_a_base)
-        grp.create_dataset('pt_a_base', data=par_pt_a_base)
-        grp.create_dataset('white_rms', data=par_white_rms)
-        grp.create_dataset('envelope_variation', data=par_envelope_var)
-        grp.create_dataset('n_resonances', data=par_n_resonances)
+        for k, v in params_dict.items():
+            grp.create_dataset(k, data=v)
+
+        if mix_meta is not None:
+            mgrp = f.create_group('mix')
+            for k, v in mix_meta.items():
+                mgrp.create_dataset(k, data=v)
+
+
+def generate_noise_shard(n_windows, periodic_path, white_path, total_path,
+                         seed):
+    rng = np.random.default_rng(seed)
+    n_samples = int(DURATION * F_SAMPLE)
+
+    wave_periodic = np.zeros((n_windows, n_samples), dtype=np.float64)
+    wave_white = np.zeros((n_windows, n_samples), dtype=np.float64)
+    wave_total = np.zeros((n_windows, n_samples), dtype=np.float64)
+
+    # Per-window scalar params (logged identically in periodic/white/total)
+    par_target_rms = np.zeros(n_windows)
+    par_alpha_color = np.zeros(n_windows)  # 1/f^α exponent (not the mix α)
+    par_f_cross = np.zeros(n_windows)
+    par_ac_a_base = np.zeros(n_windows)
+    par_pt_a_base = np.zeros(n_windows)
+    par_white_rms = np.zeros(n_windows)
+    par_envelope_var = np.zeros(n_windows)
+    par_n_resonances = np.zeros(n_windows, dtype=int)
+
+    # Mix metadata (only stored on noise_total)
+    mix_alpha = np.zeros(n_windows)
+    mix_beta = np.zeros(n_windows)
+    mix_r = np.zeros(n_windows)
+    mix_scale = np.zeros(n_windows)
+
+    t_start = time.time()
+    for i in range(n_windows):
+        params = sample_noise_params(rng)
+        periodic, white, total, meta = generate_paired_noise(
+            rng, params, duration=DURATION, f_sample=F_SAMPLE,
+        )
+        wave_periodic[i] = periodic
+        wave_white[i] = white
+        wave_total[i] = total
+
+        par_target_rms[i] = params['target_rms']
+        par_alpha_color[i] = params['alpha']
+        par_f_cross[i] = params['f_cross']
+        par_ac_a_base[i] = params['ac_a_base']
+        par_pt_a_base[i] = params['pt_a_base']
+        par_white_rms[i] = params['white_rms']
+        par_envelope_var[i] = params['envelope_variation']
+        par_n_resonances[i] = len(params['resonances'])
+
+        mix_alpha[i] = meta['alpha']
+        mix_beta[i] = meta['beta']
+        mix_r[i] = meta['r']
+        mix_scale[i] = meta['scale']
+
+        if (i + 1) % 100 == 0 or i == 0:
+            elapsed = time.time() - t_start
+            rate = (i + 1) / elapsed
+            eta = (n_windows - i - 1) / rate if rate > 0 else 0
+            print(f"  [{i+1}/{n_windows}] "
+                  f"({rate:.1f} windows/s, ETA {eta:.0f}s)")
+
+    params_dict = {
+        'target_rms': par_target_rms,
+        'alpha': par_alpha_color,
+        'f_cross': par_f_cross,
+        'ac_a_base': par_ac_a_base,
+        'pt_a_base': par_pt_a_base,
+        'white_rms': par_white_rms,
+        'envelope_variation': par_envelope_var,
+        'n_resonances': par_n_resonances,
+    }
+    mix_meta = {
+        'alpha': mix_alpha,
+        'beta': mix_beta,
+        'r': mix_r,
+        'scale': mix_scale,
+    }
+
+    print(f"Saving periodic → {periodic_path}")
+    _write_shard(periodic_path, wave_periodic, params_dict, seed=seed)
+    print(f"Saving white    → {white_path}")
+    _write_shard(white_path, wave_white, params_dict, seed=seed)
+    print(f"Saving total    → {total_path}")
+    _write_shard(total_path, wave_total, params_dict,
+                 mix_meta=mix_meta, seed=seed)
 
     elapsed = time.time() - t_start
-    print(f"Done. {n_windows} windows in {elapsed:.1f}s "
+    print(f"Done. {n_windows} paired windows in {elapsed:.1f}s "
           f"({n_windows/elapsed:.1f} windows/s)")
 
 
 if __name__ == '__main__':
-    for shard in range(N_SHARDS):
-        output_file = os.path.join(OUTPUT_DIR, f'noise_{shard:03d}.h5')
-        if os.path.exists(output_file):
-            print(f"Shard {shard} already exists, skipping: {output_file}")
+    parser = argparse.ArgumentParser(description="Generate paired noise shards")
+    parser.add_argument('--output_dir', type=str,
+                        default='/media/Disk_YIN/yunshancheng/cuore/noise_v2',
+                        help='Root dir; will contain noise_periodic/, noise_white/, noise_total/ '
+                             '(or split= prefixes)')
+    parser.add_argument('--split', type=str, default='',
+                        help='Optional subdir under each of {periodic,white,total} '
+                             '(e.g. "test"); default writes directly to noise_*/')
+    parser.add_argument('--n_shards', type=int, default=10)
+    parser.add_argument('--windows_per_shard', type=int, default=10000)
+    parser.add_argument('--base_seed', type=int, default=7777)
+    args = parser.parse_args()
+
+    periodic_dir = os.path.join(args.output_dir, 'noise_periodic', args.split)
+    white_dir = os.path.join(args.output_dir, 'noise_white', args.split)
+    total_dir = os.path.join(args.output_dir, 'noise_total', args.split)
+
+    for d in (periodic_dir, white_dir, total_dir):
+        os.makedirs(d, exist_ok=True)
+
+    for shard in range(args.n_shards):
+        fname = f'noise_{shard:03d}.h5'
+        periodic_path = os.path.join(periodic_dir, fname)
+        white_path = os.path.join(white_dir, fname)
+        total_path = os.path.join(total_dir, fname)
+
+        if (os.path.exists(periodic_path)
+                and os.path.exists(white_path)
+                and os.path.exists(total_path)):
+            print(f"Shard {shard} already complete, skipping.")
             continue
 
-        seed = BASE_SEED + shard * 1000
+        seed = args.base_seed + shard * 1000
         print(f"\n{'='*60}")
-        print(f"Generating shard {shard}/{N_SHARDS}: {output_file}")
-        print(f"  Windows: {WINDOWS_PER_SHARD}, seed: {seed}")
+        print(f"Generating shard {shard}/{args.n_shards}")
+        print(f"  Windows: {args.windows_per_shard}, seed: {seed}")
         print(f"{'='*60}")
 
-        generate_noise_shard(WINDOWS_PER_SHARD, output_file, seed)
+        generate_noise_shard(args.windows_per_shard,
+                             periodic_path, white_path, total_path,
+                             seed=seed)
 
-    print(f"\nAll {N_SHARDS} shards complete.")
+    print(f"\nAll {args.n_shards} shards complete.")
