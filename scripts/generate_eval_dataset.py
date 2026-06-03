@@ -225,14 +225,18 @@ def generate_resolution(noise_dir: str, output_dir: str,
 
 def generate_efficiency(noise_dir: str, output_dir: str,
                         energy_kev: float, snr_factor: float,
-                        n_events: int, seed: int):
-    """n_events at energy_kev with noise_RMS = signal_amplitude / snr_factor."""
+                        n_events: int, seed: int,
+                        noise_rms_mv: float = None):
+    """n_events at energy_kev with fixed noise level.
+
+    If noise_rms_mv is given (in mV), noise is scaled to that absolute RMS.
+    Otherwise noise_RMS = signal_amplitude / snr_factor.
+    """
     rng = np.random.default_rng(seed)
     noise_pool, noise_param_pool = _load_noise_pool(noise_dir)
 
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"\nEfficiency dataset: {energy_kev:.0f} keV, SNR-factor={snr_factor}")
     t0 = time.time()
 
     print("  Finding stable detector parameters...")
@@ -241,7 +245,15 @@ def generate_efficiency(noise_dir: str, output_dir: str,
     print("  Simulating clean template...")
     clean   = _simulate_template(energy_kev, det_params, det_eq)
     sig_amp = _signal_amplitude(clean)
-    target_noise_rms = sig_amp / snr_factor
+
+    if noise_rms_mv is not None:
+        target_noise_rms = noise_rms_mv * 1e-3
+        print(f"\nEfficiency dataset: {energy_kev:.0f} keV, "
+              f"fixed noise_rms={noise_rms_mv:.2f} mV")
+    else:
+        target_noise_rms = sig_amp / snr_factor
+        print(f"\nEfficiency dataset: {energy_kev:.0f} keV, SNR-factor={snr_factor}")
+
     print(f"  Signal amplitude: {sig_amp*1e3:.2f} mV")
     print(f"  Target noise RMS: {target_noise_rms*1e3:.2f} mV  "
           f"(SNR ~ {_snr_db(sig_amp, target_noise_rms):.1f} dB)")
@@ -307,7 +319,9 @@ def main():
     p_eff.add_argument('--output_dir', required=True)
     p_eff.add_argument('--energy_kev', type=float, default=100.0)
     p_eff.add_argument('--snr_factor', type=float, default=2.0,
-                       help='noise_RMS = signal_amplitude / snr_factor')
+                       help='noise_RMS = signal_amplitude / snr_factor (ignored if --noise_rms set)')
+    p_eff.add_argument('--noise_rms', type=float, default=None,
+                       help='Fixed absolute noise RMS in mV (overrides --snr_factor)')
     p_eff.add_argument('--n_events', type=int, default=5000)
     p_eff.add_argument('--seed', type=int, default=1)
 
@@ -319,7 +333,8 @@ def main():
     else:
         generate_efficiency(args.noise_dir, args.output_dir,
                             args.energy_kev, args.snr_factor,
-                            args.n_events, args.seed)
+                            args.n_events, args.seed,
+                            noise_rms_mv=args.noise_rms)
 
 
 if __name__ == '__main__':
