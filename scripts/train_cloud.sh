@@ -16,6 +16,14 @@
 
 set -e
 
+# On any error: shutdown immediately to stop billing
+on_error() {
+    echo ""
+    echo "ERROR — shutting down to stop billing at $(date)"
+    shutdown -h now
+}
+trap on_error ERR
+
 CLEAN_DIR="/root/autodl-tmp/data/clean"
 NOISE_DIR="/root/autodl-tmp/data/noise"
 EVAL_DIR="/root/autodl-tmp/eval_data_holdout"
