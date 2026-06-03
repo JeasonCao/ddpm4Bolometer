@@ -25,7 +25,7 @@ class DiffusionSchedule:
         Ending noise level.
     """
 
-    def __init__(self, T: int = 50, beta_1: float = 1e-4, beta_T: float = 0.05):
+    def __init__(self, T: int = 50, beta_1: float = 1e-4, beta_T: float = 0.5):
         self.T = T
 
         # Quadratic schedule: beta_t = (interp(sqrt(beta_1), sqrt(beta_T)))^2

@@ -94,14 +94,17 @@ def denoise_batch(diffusion, noisy_np: np.ndarray,
 
 
 def process_file(h5_path: str, diffusion, device: torch.device,
-                 batch_size: int, shots: int, overwrite: bool):
+                 batch_size: int, shots: int, overwrite: bool,
+                 max_events: int = 0):
     with h5py.File(h5_path, 'r') as f:
         if 'waveforms_denoised' in f and not overwrite:
             print(f"  Already denoised, skipping: {h5_path}")
             return
         noisy = f['waveforms_noisy'][:]
 
-    energy = None
+    if max_events > 0:
+        noisy = noisy[:max_events]
+
     with h5py.File(h5_path, 'r') as f:
         energy = float(f.attrs.get('energy_kev', -1))
 
@@ -140,6 +143,8 @@ def main():
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--overwrite',  action='store_true',
                         help='Re-run even if waveforms_denoised already exists')
+    parser.add_argument('--max_events', type=int, default=0,
+                        help='Truncate each file to this many events (0 = all)')
 
     args = parser.parse_args()
 
@@ -165,7 +170,8 @@ def main():
         )
 
     for path in files:
-        process_file(path, diffusion, device, args.batch_size, args.shots, args.overwrite)
+        process_file(path, diffusion, device, args.batch_size, args.shots,
+                     args.overwrite, args.max_events)
 
     print("\nAll done.")
 

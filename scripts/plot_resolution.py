@@ -16,6 +16,9 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RESULTS_DIR = os.path.join(_PROJECT_DIR, 'results')
+
 import argparse
 import warnings
 import h5py
@@ -153,8 +156,8 @@ def plot_resolution(fit_dir: str, output: str, n_bins: int):
 
 def main():
     parser = argparse.ArgumentParser(description="Plot energy resolution vs SNR")
-    parser.add_argument('--fit_dir', required=True)
-    parser.add_argument('--output',  required=True)
+    parser.add_argument('--fit_dir', default=os.path.join(_RESULTS_DIR, 'fit_results', 'resolution'))
+    parser.add_argument('--output',  default=os.path.join(_RESULTS_DIR, 'plots', 'resolution.png'))
     parser.add_argument('--n_bins',  type=int, default=N_BINS)
     args = parser.parse_args()
     plot_resolution(args.fit_dir, args.output, args.n_bins)

@@ -33,14 +33,14 @@ def main():
     parser.add_argument('--noise_dir', type=str, required=True)
     parser.add_argument('--output_dir', type=str, required=True)
     parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--lr', type=float, default=2e-4)
     parser.add_argument('--T', type=int, default=50)
     parser.add_argument('--beta_1', type=float, default=1e-4,
                         help='Starting beta of the quadratic noise schedule (default: 1e-4)')
-    parser.add_argument('--beta_T', type=float, default=0.05,
-                        help='Ending beta of the quadratic noise schedule (default: 0.05). '
-                             'DeScoD-ECG uses 0.5; larger values drive alpha_bar_T closer to 0.')
+    parser.add_argument('--beta_T', type=float, default=0.5,
+                        help='Ending beta of the quadratic noise schedule (default: 0.5). '
+                             'Larger values drive alpha_bar_T closer to 0, reducing train-inference mismatch.')
     parser.add_argument('--cond_mode', type=str, default='step',
                         choices=['step', 'sqrt_ab'],
                         help='Diffusion conditioning: discrete step index (default) or '
@@ -52,7 +52,7 @@ def main():
     parser.add_argument('--save_every', type=int, default=10,
                         help='Save checkpoint every N epochs')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--num_workers', type=int, default=0)
+    parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--loss', type=str, default='l2', choices=['l1', 'l2'],
                         help='Base loss function: l1 or l2 (default: l2)')
     parser.add_argument('--w_l1', type=float, default=0.0,

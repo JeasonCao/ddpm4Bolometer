@@ -32,19 +32,8 @@ import time
 import h5py
 import numpy as np
 
-from src.pulse.simulator import DetectorParams, find_equilibrium, simulate_pulse
-
-# ── Fixed detector parameters: means of PARAM_DISTS from simulator.py ──────
-FIXED_PARAMS = DetectorParams(
-    R0=0.622,
-    T0=6.770,
-    lambda0=2.7e-9,
-    q=-32.0,
-    g_ec=0.059,
-    a_ec=5.34,
-    C_p=512e-12,
-    T_base=0.012,
-)
+from src.pulse.simulator import (DetectorParams, find_equilibrium, simulate_pulse,
+                                  sample_params, is_valid_equilibrium)
 
 # Default energy points [keV]
 DEFAULT_ENERGIES = [583.0, 1461.0, 2528.0, 2615.0, 3034.0]
@@ -52,18 +41,39 @@ DEFAULT_ENERGIES = [583.0, 1461.0, 2528.0, 2615.0, 3034.0]
 F_SAMPLE = 1000.0
 DURATION = 10.0
 ONSET    = 1.5          # pulse onset [s]
+_DRIFT_THRESHOLD = -50.0  # V — last sample below this flags divergence
+
+
+def _find_stable_params(energies_kev: list, seed: int = 9999,
+                        max_attempts: int = 200) -> tuple:
+    """Sample detector parameters until a set produces drift-free pulses at all energies."""
+    rng = np.random.default_rng(seed)
+    for attempt in range(max_attempts):
+        params = sample_params(rng)
+        eq = find_equilibrium(params)
+        if not is_valid_equilibrium(params, eq):
+            continue
+        stable = True
+        for E in energies_kev:
+            try:
+                _, v = simulate_pulse(E, params, eq,
+                                      duration=DURATION, t_onset=ONSET, f_sample=F_SAMPLE)
+                if v[-1] < _DRIFT_THRESHOLD or not np.isfinite(v).all():
+                    stable = False
+                    break
+            except Exception:
+                stable = False
+                break
+        if stable:
+            print(f"  Found stable params after {attempt+1} attempts (seed={seed})")
+            return params, eq
+    raise RuntimeError(f"Could not find stable parameters in {max_attempts} attempts")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _load_noise_pool(noise_dir: str):
-    """Load all noise waveforms and their parameters from the noise shard directory.
-
-    Returns
-    -------
-    waveforms : (N, L) float64
-    params    : dict of (N,) arrays (one per stored parameter key)
-    """
+    """Load all noise waveforms and their parameters from the noise shard directory."""
     h5_files = sorted(
         os.path.join(noise_dir, f)
         for f in os.listdir(noise_dir)
@@ -87,12 +97,10 @@ def _load_noise_pool(noise_dir: str):
     return waveforms, params
 
 
-def _simulate_template(energy_kev: float) -> np.ndarray:
-    """Simulate a single clean pulse at the given energy with fixed detector params."""
-    params = FIXED_PARAMS
-    eq     = find_equilibrium(params)
-    _, v   = simulate_pulse(energy_kev, params, eq,
-                             duration=DURATION, t_onset=ONSET, f_sample=F_SAMPLE)
+def _simulate_template(energy_kev: float, params, eq) -> np.ndarray:
+    """Simulate a single clean pulse at the given energy."""
+    _, v = simulate_pulse(energy_kev, params, eq,
+                          duration=DURATION, t_onset=ONSET, f_sample=F_SAMPLE)
     n_samples = int(DURATION * F_SAMPLE)
     return v[:n_samples].astype(np.float64)
 
@@ -145,9 +153,7 @@ def _save_dataset(output_path: str,
         f.attrs['f_sample']    = F_SAMPLE
         f.attrs['duration']    = DURATION
         f.attrs['onset_s']     = ONSET
-        f.attrs['fixed_R0']    = FIXED_PARAMS.R0
-        f.attrs['fixed_T0']    = FIXED_PARAMS.T0
-        f.attrs['fixed_T_base']= FIXED_PARAMS.T_base
+        pass  # detector params stored separately if needed
 
         f.create_dataset('clean_template',  data=clean_template,   compression='gzip')
         f.create_dataset('waveforms_noisy', data=noisy_waveforms,  compression='gzip')
@@ -172,12 +178,15 @@ def generate_resolution(noise_dir: str, output_dir: str,
 
     os.makedirs(output_dir, exist_ok=True)
 
+    print("Finding stable detector parameters...")
+    det_params, det_eq = _find_stable_params(energies, seed=seed)
+
     for energy in energies:
         print(f"\nEnergy: {energy:.0f} keV")
         t0 = time.time()
 
         print("  Simulating clean template...")
-        clean = _simulate_template(energy)
+        clean = _simulate_template(energy, det_params, det_eq)
         sig_amp = _signal_amplitude(clean)
         print(f"  Signal amplitude: {sig_amp*1e3:.2f} mV")
 
@@ -226,8 +235,11 @@ def generate_efficiency(noise_dir: str, output_dir: str,
     print(f"\nEfficiency dataset: {energy_kev:.0f} keV, SNR-factor={snr_factor}")
     t0 = time.time()
 
+    print("  Finding stable detector parameters...")
+    det_params, det_eq = _find_stable_params([energy_kev], seed=seed)
+
     print("  Simulating clean template...")
-    clean   = _simulate_template(energy_kev)
+    clean   = _simulate_template(energy_kev, det_params, det_eq)
     sig_amp = _signal_amplitude(clean)
     target_noise_rms = sig_amp / snr_factor
     print(f"  Signal amplitude: {sig_amp*1e3:.2f} mV")

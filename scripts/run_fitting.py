@@ -23,6 +23,9 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RESULTS_DIR = os.path.join(_PROJECT_DIR, 'results')
+
 import argparse
 import time
 import multiprocessing as mp
@@ -97,17 +100,14 @@ def fit_dataset(input_path: str, output_path: str,
             raise KeyError(f"waveforms_denoised not found in {input_path}. "
                            "Run run_batch_inference.py first.")
         energy_kev  = float(f.attrs.get('energy_kev', np.nan))
-        n_events    = int(f.attrs['n_events'])
-        snr_db      = f['snr_db'][:]
-        noise_rms   = f['noise_rms'][:]
         w_noisy     = f['waveforms_noisy'][:]
         w_denoised  = f['waveforms_denoised'][:]
-        noise_params = {k: f['noise_params'][k][:] for k in f['noise_params']}
+        # Use actual denoised count (may be truncated via --max_events)
+        n_events    = min(len(w_noisy), len(w_denoised))
+        snr_db      = f['snr_db'][:n_events]
+        noise_rms   = f['noise_rms'][:n_events]
+        noise_params = {k: f['noise_params'][k][:n_events] for k in f['noise_params']}
 
-    true_amp  = max_baseline_amplitude(
-        w_noisy[0] - (w_noisy[0] - w_noisy[0]),   # placeholder; use template if available
-    )
-    # Load clean template for amplitude deviation calculation
     with h5py.File(input_path, 'r') as f:
         clean_template = f['clean_template'][:]
     true_amp = max_baseline_amplitude(clean_template, F_SAMPLE)
@@ -194,6 +194,16 @@ def fit_dataset(input_path: str, output_path: str,
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+def _infer_subdir(path: str) -> str:
+    """Guess fit-results subfolder from input path (resolution / efficiency / …)."""
+    p = path.lower()
+    if 'efficiency' in p:
+        return 'efficiency'
+    if 'resolution' in p:
+        return 'resolution'
+    return 'misc'
+
+
 def main():
     parser = argparse.ArgumentParser(description="Batch pulse fitting on eval datasets")
 
@@ -223,14 +233,20 @@ def main():
             base = os.path.splitext(os.path.basename(args.input))[0]
             out_files = [os.path.join(args.output_dir, f'fit_{base[5:]}.h5')]
         else:
-            out_files = [args.input.replace('eval_', 'fit_')]
+            # derive subfolder name from input path (resolution / efficiency / etc.)
+            subdir = _infer_subdir(args.input)
+            default_out_dir = os.path.join(_RESULTS_DIR, 'fit_results', subdir)
+            os.makedirs(default_out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(args.input))[0]
+            out_files = [os.path.join(default_out_dir, f'fit_{base[5:]}.h5')]
     else:
         files = sorted(
             os.path.join(args.input_dir, f)
             for f in os.listdir(args.input_dir)
             if f.endswith('.h5')
         )
-        out_dir = args.output_dir or args.input_dir.replace('eval_data', 'fit_results')
+        subdir = _infer_subdir(args.input_dir)
+        out_dir = args.output_dir or os.path.join(_RESULTS_DIR, 'fit_results', subdir)
         os.makedirs(out_dir, exist_ok=True)
         out_files = [
             os.path.join(out_dir, 'fit_' + os.path.basename(p)[5:])

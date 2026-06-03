@@ -16,6 +16,9 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RESULTS_DIR = os.path.join(_PROJECT_DIR, 'results')
+
 import argparse
 import h5py
 import numpy as np
@@ -109,9 +112,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="Plot small-signal reconstruction efficiency")
     parser.add_argument('--fit_file', required=True)
-    parser.add_argument('--output',   required=True)
+    parser.add_argument('--output',   default=None,
+                        help='Output path; defaults to results/plots/efficiency_<stem>.png')
     args = parser.parse_args()
-    plot_efficiency(args.fit_file, args.output)
+    output = args.output
+    if output is None:
+        stem = os.path.splitext(os.path.basename(args.fit_file))[0]
+        output = os.path.join(_RESULTS_DIR, 'plots', f'efficiency_{stem[4:]}.png')
+    plot_efficiency(args.fit_file, output)
 
 
 if __name__ == '__main__':
