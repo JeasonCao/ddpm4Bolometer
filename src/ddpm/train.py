@@ -194,7 +194,7 @@ def main():
     # Scheduler: on resume, only covers remaining epochs (no warm-up)
     remaining_epochs = args.epochs - start_epoch + 1
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=remaining_epochs, eta_min=1e-7,
+        optimizer, T_max=remaining_epochs, eta_min=1e-6,
     )
     if args.resume:
         print(f"Cosine schedule: {args.lr:.2e} -> 1e-6 over {remaining_epochs} epochs")
