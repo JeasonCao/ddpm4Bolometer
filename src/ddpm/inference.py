@@ -85,6 +85,23 @@ def compute_snr(clean: np.ndarray, denoised: np.ndarray) -> float:
     return float(10.0 * np.log10(signal_power / error_power))
 
 
+def compute_psnr(clean: np.ndarray, denoised: np.ndarray) -> float:
+    """Peak SNR in dB: 10*log10(MAX^2 / MSE), MAX = max(|clean|).
+
+    Uses the clean pulse peak amplitude as the reference, so PSNR reports
+    error relative to the *peak* signal level rather than total energy
+    (cf. SNR). For bolometer pulses this is closer to the physically
+    meaningful "how clean is the peak vs. the noise floor" question.
+    """
+    mse = float(np.mean((clean - denoised) ** 2))
+    peak = float(np.max(np.abs(clean)))
+    if mse == 0:
+        return float('inf')
+    if peak == 0:
+        return float('-inf')
+    return float(10.0 * np.log10(peak ** 2 / mse))
+
+
 def compute_sc(clean: np.ndarray, denoised: np.ndarray,
                n_fft: int = 1024) -> float:
     """Spectral Convergence: ||STFT(clean)-STFT(den)||_F / ||STFT(clean)||_F."""
@@ -221,6 +238,7 @@ def compute_all_metrics(clean: np.ndarray, signal: np.ndarray,
         'cosine_sim': compute_cosine_sim(clean, signal),
         'cc': compute_cc(clean, signal),
         'snr': compute_snr(clean, signal),
+        'psnr': compute_psnr(clean, signal),
         'sc': compute_sc(clean, signal),
         'lsd': compute_lsd(clean, signal),
         'jasd': compute_jasd(clean, signal),
@@ -251,6 +269,7 @@ _SCATTER_METRICS = [
     dict(key='cosine_sim',    label='1 - Cosine',  transform=lambda v: 1.0 - v),
     dict(key='cc',            label='1 - CC',      transform=lambda v: 1.0 - v),
     dict(key='snr',           label='SNR (dB)'),
+    dict(key='psnr',          label='PSNR (dB)'),
     dict(key='sc',            label='SC'),
     dict(key='lsd',           label='LSD'),
     dict(key='jasd',          label='J_asd'),
@@ -400,8 +419,8 @@ def main():
     parser.add_argument('--T', type=int, default=50)
     parser.add_argument('--beta_1', type=float, default=1e-4,
                         help='Must match training value (default: 1e-4)')
-    parser.add_argument('--beta_T', type=float, default=0.05,
-                        help='Must match training value (default: 0.05)')
+    parser.add_argument('--beta_T', type=float, default=0.5,
+                        help='Must match training value (default: 0.5)')
     parser.add_argument('--cond_mode', type=str, default='step',
                         choices=['step', 'sqrt_ab'],
                         help='Must match training value (default: step)')
@@ -564,7 +583,8 @@ def main():
         m_multi = compute_all_metrics(x_clean_np, x_multi,
                                       x_clean_norm, x_multi_norm)
 
-        # Peak amplitudes and peak times via biexponential fit (paper eq. 2).
+        # Peak amplitudes and peak times via tri-exponential fit
+        # (Carrettoni & Vignati 2011, eq. 4.1).
         # Convention: pulses ordered by peak time (earliest first).
         from src.basics.fit import fit_pulse
         fit_clean = fit_pulse(x_clean_np, n_peaks)
@@ -625,7 +645,7 @@ def main():
 
     # ── Print metrics table ──
     all_keys = ['mse', 'mae', 'mad', 'prd', 'cosine_sim', 'cc', 'snr',
-                'sc', 'lsd', 'jasd']
+                'psnr', 'sc', 'lsd', 'jasd']
     avg = {'noisy': {}, 'single': {}, 'multi': {}}
     for r in results:
         for key in all_keys:
@@ -662,18 +682,18 @@ def main():
         for key in all_keys:
             avg[label][key] /= n
 
-    print(f"\n{'=' * 170}")
+    print(f"\n{'=' * 180}")
     print(f"{'':>8} | {'MSE':>10} {'MAE':>10} {'MAD':>10} {'BL RMS':>10} {'chi2/ndf':>11} {'PRD%':>8} {'Cosine':>8} {'CC':>8} "
-          f"{'SNR dB':>8} {'SC':>8} {'LSD':>8} {'J_asd':>8} {'|Amp|%':>8} {'|dt|ms':>8}")
-    print(f"{'-' * 150}")
+          f"{'SNR dB':>8} {'PSNR dB':>8} {'SC':>8} {'LSD':>8} {'J_asd':>8} {'|Amp|%':>8} {'|dt|ms':>8}")
+    print(f"{'-' * 160}")
     for label, name in [('noisy', 'Noisy'), ('single', '1-shot'), ('multi', '10-shot')]:
         m = avg[label]
         print(f"{name:>8} | {m['mse']:10.6f} {m['mae']:10.6f} {m['mad']:10.6f} "
               f"{m['baseline_rms']*1e3:9.4f}m {m['chi2_per_ndf']:11.3f} {m['prd']:8.2f} "
-              f"{m['cosine_sim']:8.5f} {m['cc']:8.5f} {m['snr']:8.2f} "
+              f"{m['cosine_sim']:8.5f} {m['cc']:8.5f} {m['snr']:8.2f} {m['psnr']:8.2f} "
               f"{m['sc']:8.4f} {m['lsd']:8.4f} {m['jasd']:8.4f} "
               f"{m['amp_abs_err_pct']:8.2f} {m['time_abs_err_ms']:8.2f}")
-    print(f"{'=' * 170}")
+    print(f"{'=' * 180}")
 
     # ── Inference-speed benchmark ──
     ts = np.array(t_single_list)
@@ -760,6 +780,7 @@ def main():
             f"{'Cosine':>12}  {mn['cosine_sim']:10.6f}  {ms['cosine_sim']:10.6f}  {mm['cosine_sim']:10.6f}",
             f"{'CC':>12}  {mn['cc']:10.6f}  {ms['cc']:10.6f}  {mm['cc']:10.6f}",
             f"{'SNR (dB)':>12}  {mn['snr']:10.2f}  {ms['snr']:10.2f}  {mm['snr']:10.2f}",
+            f"{'PSNR (dB)':>12}  {mn['psnr']:10.2f}  {ms['psnr']:10.2f}  {mm['psnr']:10.2f}",
             f"{'SC':>12}  {mn['sc']:10.4f}  {ms['sc']:10.4f}  {mm['sc']:10.4f}",
             f"{'LSD':>12}  {mn['lsd']:10.4f}  {ms['lsd']:10.4f}  {mm['lsd']:10.4f}",
             f"{'J_asd':>12}  {mn['jasd']:10.4f}  {ms['jasd']:10.4f}  {mm['jasd']:10.4f}",
