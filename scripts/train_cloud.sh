@@ -112,6 +112,19 @@ echo "  rsync -avz -e 'ssh -p <PORT>' root@<IP>:/root/autodl-tmp/output/run01/ /
 echo "  rsync -avz -e 'ssh -p <PORT>' root@<IP>:/root/autodl-tmp/eval_data_holdout/ /local/eval_data_holdout_denoised/"
 echo ""
 
+# ── Copy results to file storage (NAS) ────────────────────────────────────────
+echo "Copying results to /root/autodl-fs/ (persistent file storage)..."
+mkdir -p /root/autodl-fs/output/run01
+mkdir -p /root/autodl-fs/eval_data_holdout
+
+cp -r "$OUTPUT_DIR"/. /root/autodl-fs/output/run01/
+cp -r "$EVAL_DIR"/. /root/autodl-fs/eval_data_holdout/
+
+echo "  Model + checkpoints → /root/autodl-fs/output/run01/"
+echo "  Eval results        → /root/autodl-fs/eval_data_holdout/"
+echo "Copy complete at $(date)."
+echo ""
+
 # ── Shutdown ───────────────────────────────────────────────────────────────────
 echo "Shutting down in 60 seconds... (SSH in and kill the shutdown process to cancel)"
 sleep 60
