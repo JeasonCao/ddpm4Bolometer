@@ -113,16 +113,21 @@ echo "  rsync -avz -e 'ssh -p <PORT>' root@<IP>:/root/autodl-tmp/eval_data_holdo
 echo ""
 
 # ── Copy results to file storage (NAS) ────────────────────────────────────────
-echo "Copying results to /root/autodl-fs/ (persistent file storage)..."
-mkdir -p /root/autodl-fs/output/run01
-mkdir -p /root/autodl-fs/eval_data_holdout
-
-cp -r "$OUTPUT_DIR"/. /root/autodl-fs/output/run01/
-cp -r "$EVAL_DIR"/. /root/autodl-fs/eval_data_holdout/
-
-echo "  Model + checkpoints → /root/autodl-fs/output/run01/"
-echo "  Eval results        → /root/autodl-fs/eval_data_holdout/"
-echo "Copy complete at $(date)."
+# /root/autodl-fs is only available if file storage was initialized in the
+# AutoDL console AND the instance was restarted after initialization.
+if [ -d "/root/autodl-fs" ] && mountpoint -q /root/autodl-fs 2>/dev/null || [ -d "/root/autodl-fs" ]; then
+    echo "Copying results to /root/autodl-fs/ (persistent file storage)..."
+    mkdir -p /root/autodl-fs/output/run01
+    mkdir -p /root/autodl-fs/eval_data_holdout
+    cp -r "$OUTPUT_DIR"/. /root/autodl-fs/output/run01/
+    cp -r "$EVAL_DIR"/. /root/autodl-fs/eval_data_holdout/
+    echo "  Model + checkpoints → /root/autodl-fs/output/run01/"
+    echo "  Eval results        → /root/autodl-fs/eval_data_holdout/"
+    echo "Copy complete at $(date)."
+else
+    echo "WARNING: /root/autodl-fs not mounted — skipping NAS copy."
+    echo "  Initialize file storage in AutoDL console and restart instance to enable."
+fi
 echo ""
 
 # ── Shutdown ───────────────────────────────────────────────────────────────────
