@@ -52,7 +52,7 @@ echo ""
 
 # ── Install dependencies ───────────────────────────────────────────────────────
 echo "[1/4] Installing Python dependencies..."
-pip install -q numpy scipy h5py matplotlib tqdm
+pip3 install -q numpy scipy h5py matplotlib tqdm
 echo "Done."
 echo ""
 
