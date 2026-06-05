@@ -16,6 +16,12 @@
 
 set -e
 
+# Load conda so pip3/python3 resolve to miniconda (not system Python)
+source /root/miniconda3/etc/profile.d/conda.sh 2>/dev/null || \
+    source /root/anaconda3/etc/profile.d/conda.sh 2>/dev/null || true
+conda activate base 2>/dev/null || true
+export PATH="/root/miniconda3/bin:/root/anaconda3/bin:$PATH"
+
 # On any error: shutdown immediately to stop billing
 on_error() {
     echo ""
@@ -61,7 +67,7 @@ echo "[2/4] Starting training..."
 mkdir -p "$OUTPUT_DIR"
 cd "$CODE_DIR"
 
-python -u -m src.ddpm.train \
+python3 -u -m src.ddpm.train \
     --clean_dir  "$CLEAN_DIR"  \
     --noise_dir  "$NOISE_DIR"  \
     --output_dir "$OUTPUT_DIR" \
@@ -74,7 +80,9 @@ python -u -m src.ddpm.train \
     --beta_T  0.5              \
     --num_workers 4            \
     --save_every  10           \
-    --amp
+    --amp                      \
+    --preload                  \
+    --patience 10
 
 echo ""
 echo "Training complete at $(date)."
@@ -88,12 +96,12 @@ echo "[3/4] Running DDIM inference on all eval datasets..."
 for SUBDIR in resolution efficiency_7p5mV efficiency_1p2mV; do
     echo ""
     echo "--- Inferring: $SUBDIR ---"
-    python -u scripts/run_batch_inference.py \
+    python3 -u scripts/run_batch_inference.py \
         --model_path "$MODEL_PATH"           \
         --input_dir  "$EVAL_DIR/$SUBDIR"     \
         --sampler ddim                       \
         --seed    42                         \
-        --batch_size 64                      \
+        --batch_size 256                     \
         --overwrite
 done
 

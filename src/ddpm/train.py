@@ -65,6 +65,10 @@ def main():
                         help='Weight for ASD ratio loss (J_asd)')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint .pt file to resume from')
+    parser.add_argument('--preload', action='store_true',
+                        help='Preload all waveforms into RAM before training (~8 GB)')
+    parser.add_argument('--patience', type=int, default=0,
+                        help='Early stopping: stop if val_loss does not improve for N epochs (0=disabled)')
     parser.add_argument('--amp', action='store_true',
                         help='Enable mixed precision training (float16)')
     parser.add_argument('--compile', action='store_true',
@@ -91,7 +95,7 @@ def main():
 
     # Dataset
     print("Loading dataset...")
-    dataset = PulseNoiseDataset(args.clean_dir, args.noise_dir, subset=args.subset)
+    dataset = PulseNoiseDataset(args.clean_dir, args.noise_dir, subset=args.subset, preload=args.preload)
     if args.subset:
         print(f"Subset filter: '{args.subset}' -> {len(dataset)} samples")
     n_total = len(dataset)
@@ -157,6 +161,7 @@ def main():
     # Resume from checkpoint
     start_epoch = 1
     best_val_loss = float('inf')
+    epochs_no_improve = 0
     history = {'train_loss': [], 'val_loss': [], 'lr': [],
                'step_loss': [], 'step_num': []}
     global_step = 0
@@ -289,12 +294,26 @@ def main():
         history['val_loss'].append(val_loss)
         history['lr'].append(lr)
 
-        # Save best
+        # Save best / early stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            epochs_no_improve = 0
             torch.save(raw_model.state_dict(),
                        os.path.join(args.output_dir, 'best_model.pt'))
             print(f"  -> New best val_loss: {val_loss:.6f}")
+        else:
+            epochs_no_improve += 1
+            if args.patience > 0 and epochs_no_improve >= args.patience:
+                print(f"  -> Early stopping: no improvement for {args.patience} epochs.")
+                torch.save({
+                    'epoch': epoch,
+                    'global_step': global_step,
+                    'model_state_dict': raw_model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'train_loss': train_loss,
+                    'val_loss': val_loss,
+                }, os.path.join(args.output_dir, f'checkpoint_{epoch:03d}.pt'))
+                break
 
         # Periodic checkpoint
         if epoch % args.save_every == 0:

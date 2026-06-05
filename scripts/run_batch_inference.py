@@ -83,12 +83,15 @@ def denoise_batch(diffusion, noisy_np: np.ndarray,
 
         x_tilde = torch.from_numpy(batch_norm).unsqueeze(1).to(device)  # (B,1,L)
 
-        if sampler == 'ddim':
-            x_out = diffusion.ddim_sample(x_tilde, eta=eta)     # (B,1,L)
-        elif shots == 1:
-            x_out = diffusion.sample(x_tilde)
-        else:
-            x_out = diffusion.sample_multi_shot(x_tilde, M=shots)
+        amp_ctx = torch.autocast(device_type=device.type, dtype=torch.float16,
+                                 enabled=device.type == 'cuda')
+        with amp_ctx:
+            if sampler == 'ddim':
+                x_out = diffusion.ddim_sample(x_tilde, eta=eta)     # (B,1,L)
+            elif shots == 1:
+                x_out = diffusion.sample(x_tilde)
+            else:
+                x_out = diffusion.sample_multi_shot(x_tilde, M=shots)
 
         # Denormalise
         x_out_np = x_out.squeeze(1).cpu().numpy()               # (B, L)

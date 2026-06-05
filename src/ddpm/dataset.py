@@ -64,7 +64,7 @@ class PulseNoiseDataset(Dataset):
         Requires running preprocess_index.py first.
     """
 
-    def __init__(self, clean_path: str, noise_path: str, subset: str = None):
+    def __init__(self, clean_path: str, noise_path: str, subset: str = None, preload: bool = False):
         self.clean_files = self._resolve_files(clean_path, 'clean_*.h5')
         self.noise_files = self._resolve_files(noise_path, 'noise_*.h5')
 
@@ -118,6 +118,25 @@ class PulseNoiseDataset(Dataset):
         # Thread-local storage for h5py file handles (fork-safe)
         self._local = threading.local()
 
+        # Optional: preload all waveforms into RAM
+        self.preload = preload
+        self._clean_cache: list = []
+        self._noise_cache: list = []
+        if preload:
+            self._preload_data()
+
+    def _preload_data(self):
+        print(f"Preloading {len(self.clean_files)} clean shards into RAM...")
+        for fpath in self.clean_files:
+            with h5py.File(fpath, 'r') as f:
+                self._clean_cache.append(f['waveforms'][:].astype(np.float32))
+        print(f"Preloading {len(self.noise_files)} noise shards into RAM...")
+        for fpath in self.noise_files:
+            with h5py.File(fpath, 'r') as f:
+                self._noise_cache.append(f['waveforms'][:].astype(np.float32))
+        total_gb = sum(a.nbytes for a in self._clean_cache + self._noise_cache) / 1e9
+        print(f"Preload complete. RAM used: {total_gb:.1f} GB")
+
     @staticmethod
     def _resolve_files(path, pattern):
         """Accept a single .h5 file or a directory of shards."""
@@ -146,11 +165,15 @@ class PulseNoiseDataset(Dataset):
 
     def _get_clean(self, idx):
         file_idx, win_idx = self.clean_index[idx]
+        if self.preload:
+            return self._clean_cache[file_idx][win_idx]
         return self._get_h5('clean', file_idx)['waveforms'][win_idx]
 
     def _get_noise(self, idx):
         idx = idx % self.n_noise
         file_idx, win_idx = self.noise_index[idx]
+        if self.preload:
+            return self._noise_cache[file_idx][win_idx]
         return self._get_h5('noise', file_idx)['waveforms'][win_idx]
 
     def __getitem__(self, idx):
