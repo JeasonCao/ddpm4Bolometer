@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
 import time
+from datetime import datetime
 import h5py
 import numpy as np
 import torch
@@ -136,6 +137,7 @@ def process_file(h5_path: str, diffusion, device: torch.device,
         f.attrs['inference_eta']        = eta
         f.attrs['inference_seed']       = seed
         f.attrs['inference_batch_size'] = batch_size
+        f.attrs['inference_timestamp']  = datetime.now().strftime('%Y%m%d')
     print(f"  Saved waveforms_denoised → {h5_path}")
 
 
