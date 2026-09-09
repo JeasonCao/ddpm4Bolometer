@@ -2,3 +2,4 @@ diary/
 results/
 *.pyc
 __pycache__/
+reference/
