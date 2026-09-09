@@ -21,6 +21,7 @@ _RESULTS_DIR = os.path.join(_PROJECT_DIR, 'results')
 import argparse
 import h5py
 import numpy as np
+from src.basics.plot_utils import suffix_from_model_dir, fit_energy_calibration
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -51,19 +52,26 @@ def plot_spectrum_panel(ax, amp_n_kev, amp_d_kev, title, energy_kev, n_bins=60):
     ax.grid(alpha=0.3)
 
 
-def process_file(h5_path):
+def process_file(h5_path, use_maxbase: bool = False):
+    amp_n_key = 'amp_maxbase_noisy'    if use_maxbase else 'amp_noisy'
+    amp_d_key = 'amp_maxbase_denoised' if use_maxbase else 'amp_denoised'
     with h5py.File(h5_path, 'r') as f:
         energy_kev   = float(f.attrs['energy_kev'])
         true_amp_V   = float(f.attrs['true_amp_V'])
         snr_db       = f['snr_db'][:]
-        amp_n        = f['amp_noisy'][:]
-        amp_d        = f['amp_denoised'][:]
-        conv_n       = f['converged_noisy'][:]
-        conv_d       = f['converged_denoised'][:]
+        amp_n        = f[amp_n_key][:]
+        amp_d        = f[amp_d_key][:]
+        # maxbase has no convergence flag — treat all events as converged
+        if use_maxbase:
+            conv_n = np.ones(len(amp_n), dtype=bool)
+            conv_d = np.ones(len(amp_d), dtype=bool)
+        else:
+            conv_n = f['converged_noisy'][:].astype(bool)
+            conv_d = f['converged_denoised'][:].astype(bool)
     return energy_kev, true_amp_V, snr_db, amp_n, amp_d, conv_n, conv_d
 
 
-def plot_spectra(fit_dir: str, output: str):
+def plot_spectra(fit_dir: str, output: str, use_maxbase: bool = False):
     fit_files = sorted(
         os.path.join(fit_dir, f)
         for f in os.listdir(fit_dir)
@@ -72,20 +80,26 @@ def plot_spectra(fit_dir: str, output: str):
     if not fit_files:
         raise FileNotFoundError(f"No fit HDF5 files in {fit_dir}")
 
+    # Separate linear calibrations: E = k * amp + b
+    k_n, b_n = fit_energy_calibration(fit_files, which='noisy',    use_maxbase=use_maxbase)
+    k_d, b_d = fit_energy_calibration(fit_files, which='denoised', use_maxbase=use_maxbase)
+    print(f"Calibration (noisy)   : k={k_n:.4f} keV/V, b={b_n:.4f} keV")
+    print(f"Calibration (denoised): k={k_d:.4f} keV/V, b={b_d:.4f} keV")
+
+    amp_label = 'max-baseline' if use_maxbase else 'tri-exp fit'
     n_energies = len(fit_files)
-    # 4 rows per energy: overall + 3 SNR bins
     fig, axes = plt.subplots(n_energies, 4, figsize=(18, 4.5 * n_energies))
     if n_energies == 1:
         axes = axes[np.newaxis, :]
 
-    fig.suptitle('Energy Spectra: Before vs After DDPM Denoising', fontsize=13)
+    fig.suptitle(f'Energy Spectra: Before vs After DDPM Denoising  [{amp_label}]', fontsize=13)
 
     for row, path in enumerate(fit_files):
-        energy, true_amp, snr, amp_n, amp_d, conv_n, conv_d = process_file(path)
+        energy, true_amp, snr, amp_n, amp_d, conv_n, conv_d = process_file(path, use_maxbase)
 
-        # Convert to keV
-        akev_n = amp_to_kev(amp_n, true_amp, energy)
-        akev_d = amp_to_kev(amp_d, true_amp, energy)
+        # Convert to keV using separate calibrations for noisy and denoised
+        akev_n = amp_n * k_n + b_n
+        akev_d = amp_d * k_d + b_d
 
         # Overall
         an_all = akev_n[conv_n]
@@ -116,10 +130,19 @@ def plot_spectra(fit_dir: str, output: str):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--fit_dir', default=os.path.join(_RESULTS_DIR, 'fit_results', 'resolution'))
-    parser.add_argument('--output',  default=os.path.join(_RESULTS_DIR, 'plots', 'spectra.png'))
+    parser.add_argument('--fit_dir',     default=os.path.join(_RESULTS_DIR, 'fit_results', 'resolution'))
+    parser.add_argument('--output',      default=None)
+    parser.add_argument('--suffix',      default='', help='Manual suffix before .png, e.g. _run01')
+    parser.add_argument('--model_cfg',   default=None, metavar='MODEL_DIR',
+                        help='Model output dir; auto-builds suffix from config/history/mtime')
+    parser.add_argument('--use_maxbase', action='store_true',
+                        help='Use max-baseline amplitude instead of tri-exp fitted amplitude')
     args = parser.parse_args()
-    plot_spectra(args.fit_dir, args.output)
+    suffix = suffix_from_model_dir(args.model_cfg) if args.model_cfg else args.suffix
+    if args.use_maxbase:
+        suffix += '_maxbase'
+    output = args.output or os.path.join(_RESULTS_DIR, 'plots', 'resolution', f'spectra{suffix}.png')
+    plot_spectra(args.fit_dir, output, use_maxbase=args.use_maxbase)
 
 
 if __name__ == '__main__':

@@ -37,6 +37,16 @@ from src.basics.amplitude import max_baseline_amplitude
 
 F_SAMPLE = 1000.0
 
+
+def _pearson_r(a: np.ndarray, b: np.ndarray) -> float:
+    """Pearson correlation between two 1-D arrays."""
+    a0 = a - a.mean()
+    b0 = b - b.mean()
+    denom = np.linalg.norm(a0) * np.linalg.norm(b0)
+    if denom < 1e-12:
+        return 0.0
+    return float(np.dot(a0, b0) / denom)
+
 # ── Convergence criteria (user-configurable via CLI) ──────────────────────────
 DEFAULT_CHI2_MAX   = 10.0   # chi2/ndf upper limit
 DEFAULT_AMP_MIN    = 1e-5   # [V] minimum sensible amplitude
@@ -48,21 +58,45 @@ DEFAULT_AMP_DEV    = 0.20   # fractional deviation from true amplitude for effic
 
 def _fit_one(args):
     """Fit a single waveform. Returns a flat dict of scalars."""
-    waveform, label, chi2_max, amp_min, amp_max = args
+    waveform, label, chi2_max, amp_min, amp_max, clean_template = args
     t0 = time.time()
     fr = fit_pulse(waveform, n_pulses=1, fs=F_SAMPLE)
     elapsed = time.time() - t0
 
+    # Pearson r between fitted model curve and clean template.
+    # NaN for failed fits (counts as "not matched" in efficiency analysis).
+    fit_pearsonr = np.nan
+    if fr.success and fr.model_fn is not None and len(clean_template) == len(waveform):
+        t_arr = np.arange(len(waveform)) / F_SAMPLE
+        model_wf = fr.model_fn(t_arr, *fr.params)
+        fit_pearsonr = _pearson_r(model_wf, clean_template)
+
+    # ── stored parameters ──────────────────────────────────────────────────────
+    # Convention (biexp_single, single-pulse):
+    #   v(t) = B + A_raw * (-exp(-dt/τ_r) + α·exp(-dt/τ_d1) + (1-α)·exp(-dt/τ_d2))
+    # After fitting, τ_d1 ≤ τ_d2 is always enforced (fast ≤ slow).
+    # Therefore:
+    #   alpha  = coefficient of t_fall1  (fast decay component, τ_d1)
+    #   1-alpha = coefficient of t_fall2 (slow decay component, τ_d2)
+    # A_raw is the raw amplitude prefactor (not the physical peak amplitude;
+    # physical peak = amp = A_raw * shape_peak).
+    # With {B, A_raw, onset, t_rise, alpha, t_fall1, t_fall2} the full waveform
+    # can be reconstructed as biexp_single(t, B, A_raw, onset, t_rise, alpha, t_fall1, t_fall2).
+    s = fr.success
     result = {
-        f'success_{label}':    fr.success,
-        f'amp_{label}':        float(fr.peak_amps[0])   if fr.success else np.nan,
-        f'chi2_{label}':       float(fr.chi2_per_ndf)   if fr.success else np.nan,
-        f't_rise_{label}':     float(fr.tau_r[0])       if fr.success else np.nan,
-        f't_fall1_{label}':    float(fr.tau_d[0])       if fr.success else np.nan,
-        f't_fall2_{label}':    float(fr.tau_d2[0])      if fr.success else np.nan,
-        f'onset_{label}':      float(fr.onset_times[0]) if fr.success else np.nan,
-        f'amp_maxbase_{label}': max_baseline_amplitude(waveform, F_SAMPLE),
-        f'fit_time_{label}':   elapsed,
+        f'success_{label}':       s,
+        f'amp_{label}':           float(fr.peak_amps[0])   if s else np.nan,  # physical peak [V]
+        f'amp_raw_{label}':       float(fr.params[1])      if s else np.nan,  # A prefactor
+        f'baseline_{label}':      float(fr.baseline)       if s else np.nan,  # B [V]
+        f'alpha_{label}':         float(fr.alpha[0])       if s else np.nan,  # coeff of t_fall1
+        f'chi2_{label}':          float(fr.chi2_per_ndf)   if s else np.nan,
+        f't_rise_{label}':        float(fr.tau_r[0])       if s else np.nan,
+        f't_fall1_{label}':       float(fr.tau_d[0])       if s else np.nan,  # fast (≤ t_fall2)
+        f't_fall2_{label}':       float(fr.tau_d2[0])      if s else np.nan,  # slow
+        f'onset_{label}':         float(fr.onset_times[0]) if s else np.nan,
+        f'amp_maxbase_{label}':   max_baseline_amplitude(waveform),  # NOTE 2026-09-09: fixed baseline_frac bug, see true_amp comment below
+        f'fit_pearsonr_{label}':  fit_pearsonr,
+        f'fit_time_{label}':      elapsed,
     }
 
     # Convergence flag: success AND chi2 and amplitude in range
@@ -79,9 +113,9 @@ def _fit_one(args):
 
 def _fit_pair(args):
     """Fit one noisy and one denoised waveform. Used as the Pool work unit."""
-    idx, w_noisy, w_denoised, chi2_max, amp_min, amp_max = args
-    r_noisy    = _fit_one((w_noisy,    'noisy',    chi2_max, amp_min, amp_max))
-    r_denoised = _fit_one((w_denoised, 'denoised', chi2_max, amp_min, amp_max))
+    idx, w_noisy, w_denoised, chi2_max, amp_min, amp_max, clean_template = args
+    r_noisy    = _fit_one((w_noisy,    'noisy',    chi2_max, amp_min, amp_max, clean_template))
+    r_denoised = _fit_one((w_denoised, 'denoised', chi2_max, amp_min, amp_max, clean_template))
     combined = {'idx': idx}
     combined.update(r_noisy)
     combined.update(r_denoised)
@@ -110,14 +144,20 @@ def fit_dataset(input_path: str, output_path: str,
 
     with h5py.File(input_path, 'r') as f:
         clean_template = f['clean_template'][:]
-    true_amp = max_baseline_amplitude(clean_template, F_SAMPLE)
+    # NOTE 2026-09-09: previously called as max_baseline_amplitude(clean_template,
+    # F_SAMPLE) -- F_SAMPLE (1000.0) was being passed into the `baseline_frac`
+    # slot (expects a fraction in [0,1], default 0.05), which silently made the
+    # "baseline" the median of the WHOLE waveform instead of just the
+    # pre-trigger portion. See scripts/archive/run_fitting_pre_baseline_fix_20260909.py
+    # for the full bug writeup. Fixed: use the default baseline_frac=0.05.
+    true_amp = max_baseline_amplitude(clean_template)
 
     print(f"Fitting {n_events} events ({os.path.basename(input_path)})  "
           f"energy={energy_kev:.0f} keV  workers={workers}")
     t_start = time.time()
 
     work_items = [
-        (i, w_noisy[i], w_denoised[i], chi2_max, amp_min, amp_max)
+        (i, w_noisy[i], w_denoised[i], chi2_max, amp_min, amp_max, clean_template)
         for i in range(n_events)
     ]
 
@@ -163,15 +203,19 @@ def fit_dataset(input_path: str, output_path: str,
         f.create_dataset('noise_rms',     data=noise_rms)
 
         for label in ('noisy', 'denoised'):
-            f.create_dataset(f'amp_{label}',         data=arr(f'amp_{label}'))
-            f.create_dataset(f'amp_maxbase_{label}', data=arr(f'amp_maxbase_{label}'))
-            f.create_dataset(f'chi2_{label}',        data=arr(f'chi2_{label}'))
-            f.create_dataset(f't_rise_{label}',      data=arr(f't_rise_{label}'))
-            f.create_dataset(f't_fall1_{label}',     data=arr(f't_fall1_{label}'))
-            f.create_dataset(f't_fall2_{label}',     data=arr(f't_fall2_{label}'))
-            f.create_dataset(f'onset_{label}',       data=arr(f'onset_{label}'))
-            f.create_dataset(f'success_{label}',     data=arr(f'success_{label}', bool))
-            f.create_dataset(f'converged_{label}',   data=arr(f'converged_{label}', bool))
+            f.create_dataset(f'amp_{label}',           data=arr(f'amp_{label}'))
+            f.create_dataset(f'amp_raw_{label}',       data=arr(f'amp_raw_{label}'))
+            f.create_dataset(f'baseline_{label}',      data=arr(f'baseline_{label}'))
+            f.create_dataset(f'alpha_{label}',         data=arr(f'alpha_{label}'))
+            f.create_dataset(f'amp_maxbase_{label}',   data=arr(f'amp_maxbase_{label}'))
+            f.create_dataset(f'chi2_{label}',          data=arr(f'chi2_{label}'))
+            f.create_dataset(f't_rise_{label}',        data=arr(f't_rise_{label}'))
+            f.create_dataset(f't_fall1_{label}',       data=arr(f't_fall1_{label}'))
+            f.create_dataset(f't_fall2_{label}',       data=arr(f't_fall2_{label}'))
+            f.create_dataset(f'onset_{label}',         data=arr(f'onset_{label}'))
+            f.create_dataset(f'success_{label}',       data=arr(f'success_{label}', bool))
+            f.create_dataset(f'converged_{label}',     data=arr(f'converged_{label}', bool))
+            f.create_dataset(f'fit_pearsonr_{label}',  data=arr(f'fit_pearsonr_{label}'))
 
         f.create_dataset('amp_dev_noisy',       data=dev_noisy.astype(np.float32))
         f.create_dataset('amp_dev_denoised',    data=dev_denoised.astype(np.float32))
