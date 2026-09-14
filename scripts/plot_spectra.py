@@ -8,8 +8,8 @@ For each fit-results HDF5:
 Usage
 -----
 python scripts/plot_spectra.py \
-    --fit_dir /home/wsl_0vbb/DDPM4bolometer/fit_results/resolution \
-    --output  /home/wsl_0vbb/DDPM4bolometer/plots/spectra.png
+    --fit_dir /mnt/d/storage/research/DDPM4bolometer/fit_results/resolution \
+    --output  /mnt/d/storage/research/DDPM4bolometer/plots/spectra.png
 """
 
 import sys, os

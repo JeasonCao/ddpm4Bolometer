@@ -9,14 +9,14 @@ Usage
 -----
 # DDIM single-shot (recommended for final results — deterministic, no added noise)
 python -u scripts/run_batch_inference.py \
-    --model_path /home/wsl_0vbb/DDPM4bolometer/model_output/best_model.pt \
-    --input_dir /home/wsl_0vbb/DDPM4bolometer/eval_data/resolution \
+    --model_path /mnt/d/storage/research/DDPM4bolometer/model_output_cloud/best_model.pt \
+    --input_dir /mnt/d/storage/research/DDPM4bolometer/eval_data_holdout/resolution \
     --sampler ddim --seed 42
 
 # DDPM 1-shot (stochastic, fast validation)
 python -u scripts/run_batch_inference.py \
-    --model_path /home/wsl_0vbb/DDPM4bolometer/model_output/best_model.pt \
-    --input     /home/wsl_0vbb/DDPM4bolometer/eval_data/resolution/eval_583keV.h5 \
+    --model_path /mnt/d/storage/research/DDPM4bolometer/model_output_cloud/best_model.pt \
+    --input     /mnt/d/storage/research/DDPM4bolometer/eval_data_holdout/resolution/eval_583keV.h5 \
     --sampler ddpm --shots 1
 """
 

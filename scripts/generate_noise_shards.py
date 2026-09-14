@@ -18,7 +18,7 @@ import numpy as np
 from src.noise.generator import generate_noise, sample_noise_params
 
 parser = argparse.ArgumentParser(description="Generate noise shards")
-parser.add_argument('--output_dir', type=str, default='/home/wsl_0vbb/DDPM4bolometer/simu_data/noise')
+parser.add_argument('--output_dir', type=str, default='/mnt/d/storage/research/DDPM4bolometer/simu_data/noise')
 parser.add_argument('--n_shards', type=int, default=10)
 parser.add_argument('--windows_per_shard', type=int, default=10000)
 parser.add_argument('--base_seed', type=int, default=7777)

@@ -11,10 +11,10 @@ Each panel shows: raw waveform + tri-exp fit (A, chi²/ndf) + true noiseless pul
 Usage
 -----
 python scripts/plot_efficiency_waveforms.py \
-    --eval_dir  /home/wsl_0vbb/DDPM4bolometer/eval_data_holdout_denoised/efficiency_1p2mV \
+    --eval_dir  /mnt/d/storage/research/DDPM4bolometer/eval_data_holdout_denoised/efficiency_1p2mV \
     --fit_dir   results/fit_results/efficiency_1p2mV \
     --mode      failed \
-    --model_cfg /home/wsl_0vbb/DDPM4bolometer/model_output_cloud
+    --model_cfg /mnt/d/storage/research/DDPM4bolometer/model_output_cloud
 """
 
 import sys, os

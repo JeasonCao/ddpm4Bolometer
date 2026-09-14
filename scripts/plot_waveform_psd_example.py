@@ -16,8 +16,8 @@ pile-up mixture, so no filtering needed.
 Usage
 -----
 python scripts/plot_waveform_psd_example.py \
-    --eval_file_low  /home/wsl_0vbb/DDPM4bolometer/eval_data_holdout_denoised/efficiency_7p5mV/eval_efficiency_15keV.h5 \
-    --eval_file_high /home/wsl_0vbb/DDPM4bolometer/eval_data_holdout_denoised/efficiency_7p5mV/eval_efficiency_1461keV.h5 \
+    --eval_file_low  /mnt/d/storage/research/DDPM4bolometer/eval_data_holdout_denoised/efficiency_7p5mV/eval_efficiency_15keV.h5 \
+    --eval_file_high /mnt/d/storage/research/DDPM4bolometer/eval_data_holdout_denoised/efficiency_7p5mV/eval_efficiency_1461keV.h5 \
     --output results/plots/reconstruction_quality/waveform_psd_example.png
 """
 

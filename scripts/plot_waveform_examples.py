@@ -8,8 +8,8 @@ Picks events near the 20th / 50th / 80th SNR percentile and shows
 Usage
 -----
 python scripts/plot_waveform_examples.py \
-    --eval_file /home/wsl_0vbb/DDPM4bolometer/eval_data_holdout_denoised/resolution/eval_1461keV.h5 \
-    --model_cfg /home/wsl_0vbb/DDPM4bolometer/model_output_cloud
+    --eval_file /mnt/d/storage/research/DDPM4bolometer/eval_data_holdout_denoised/resolution/eval_1461keV.h5 \
+    --model_cfg /mnt/d/storage/research/DDPM4bolometer/model_output_cloud
 """
 
 import sys, os

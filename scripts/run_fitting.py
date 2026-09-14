@@ -8,14 +8,14 @@ model from src/basics/fit.py, and writes a fit-results HDF5 with one row per eve
 Usage
 -----
 python -u scripts/run_fitting.py \
-    --input  /home/wsl_0vbb/DDPM4bolometer/eval_data/resolution/eval_583keV.h5 \
-    --output /home/wsl_0vbb/DDPM4bolometer/fit_results/fit_583keV.h5 \
+    --input  /mnt/d/storage/research/DDPM4bolometer/eval_data_holdout/resolution/eval_583keV.h5 \
+    --output /mnt/d/storage/research/DDPM4bolometer/fit_results/fit_583keV.h5 \
     --workers 8
 
 # All files in a directory
 python -u scripts/run_fitting.py \
-    --input_dir  /home/wsl_0vbb/DDPM4bolometer/eval_data/resolution \
-    --output_dir /home/wsl_0vbb/DDPM4bolometer/fit_results \
+    --input_dir  /mnt/d/storage/research/DDPM4bolometer/eval_data_holdout/resolution \
+    --output_dir /mnt/d/storage/research/DDPM4bolometer/fit_results \
     --workers 8
 """
 

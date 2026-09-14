@@ -13,13 +13,13 @@ Usage
 -----
 # Resolution dataset (default energies)
 python -u scripts/generate_eval_dataset.py resolution \
-    --noise_dir /home/wsl_0vbb/DDPM4bolometer/simu_data/noise \
-    --output_dir /home/wsl_0vbb/DDPM4bolometer/eval_data/resolution
+    --noise_dir /mnt/d/storage/research/DDPM4bolometer/simu_data/noise \
+    --output_dir /mnt/d/storage/research/DDPM4bolometer/eval_data_holdout/resolution
 
 # Efficiency dataset at 100 keV, 2-sigma condition
 python -u scripts/generate_eval_dataset.py efficiency \
-    --noise_dir /home/wsl_0vbb/DDPM4bolometer/simu_data/noise \
-    --output_dir /home/wsl_0vbb/DDPM4bolometer/eval_data/efficiency \
+    --noise_dir /mnt/d/storage/research/DDPM4bolometer/simu_data/noise \
+    --output_dir /mnt/d/storage/research/DDPM4bolometer/eval_data_holdout/efficiency \
     --energy_kev 100 --snr_factor 2.0 --n_events 5000
 """
 

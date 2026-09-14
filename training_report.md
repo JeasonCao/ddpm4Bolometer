@@ -1,5 +1,11 @@
 # DDPM Training Report
 
+> **归档说明（2026-09-09）**：本报告记录的是早期本地训练（`beta_T=0.05`），已被云端训练出的权威模型
+> （`model_output_cloud/best_model.pt`，`beta_T=0.5`）取代。文中出现的 `/home/wsl_0vbb/DDPM4bolometer/...`
+> 路径已废弃，对应数据现归档于
+> `/mnt/d/storage/research/DDPM4bolometer/_archive_deprecated/old_local_training_beta0.05_20260909/`。
+> 以下内容保留原始记录，不做改写。
+
 ## Run Summary
 
 | 项目 | 内容 |

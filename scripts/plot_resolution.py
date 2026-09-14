@@ -8,8 +8,8 @@ Reads fit-results HDF5 files produced by run_fitting.py and produces:
 Usage
 -----
 python scripts/plot_resolution.py \
-    --fit_dir /home/wsl_0vbb/DDPM4bolometer/fit_results \
-    --output  /home/wsl_0vbb/DDPM4bolometer/plots/resolution.png
+    --fit_dir /mnt/d/storage/research/DDPM4bolometer/fit_results \
+    --output  /mnt/d/storage/research/DDPM4bolometer/plots/resolution.png
 """
 
 import sys
