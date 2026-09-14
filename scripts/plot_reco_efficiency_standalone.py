@@ -13,8 +13,8 @@ sparse (see 2026-08-13 session notes).
 Usage
 -----
 python scripts/plot_reco_efficiency_standalone.py \
-    --reco_json_1p2mV results/plots/efficiency/json \
-    --reco_json_7p5mV results/plots/efficiency_7p5mV_ext511/json \
+    --reco_json_1p2mV results/plots/efficiency_1p2mV/json \
+    --reco_json_7p5mV results/plots/efficiency_7p5mV/json \
     --output_dir results/plots/efficiency \
     --threshold 90 --max_energy 511
 """
@@ -32,11 +32,11 @@ import matplotlib.pyplot as plt
 
 from src.basics.plot_utils import (logistic4, fit_efficiency_curve,
                                    double_logistic, fit_efficiency_curve_double)
-from scripts.plot_combined_efficiency import _load_reco, _NOISE_LABELS
+from scripts.plot_combined_efficiency import _load_reco, _baseline_res_str
 
-def plot_reco_only(noise_tag, reco_data, output_path, threshold_pct=90.0, x_max=511.0):
-    noise_str = _NOISE_LABELS.get(noise_tag, noise_tag)
-    e_r, eff_b, eff_a, cut = reco_data
+def plot_reco_only(noise_tag, reco_data, output_path, threshold_pct=90.0, x_max=511.0, method='triexp'):
+    e_r, eff_b, eff_a, cut, calib_k = reco_data
+    noise_str = _baseline_res_str(noise_tag, calib_k)
     cut_pct = int(round(cut * 100))
 
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -75,7 +75,8 @@ def plot_reco_only(noise_tag, reco_data, output_path, threshold_pct=90.0, x_max=
     ax.set_ylim(-5, 112)
     ax.set_xlabel('Energy (keV)', fontsize=11)
     ax.set_ylabel('Efficiency (%)', fontsize=11)
-    ax.set_title(f'Reconstruction Efficiency vs Energy\nTri-exp fit | noise RMS = {noise_str}', fontsize=11)
+    method_label = 'Tri-exp fit' if method == 'triexp' else 'Max-baseline'
+    ax.set_title(f'Reconstruction Efficiency vs Energy\n{method_label} | {noise_str}', fontsize=11)
     ax.legend(fontsize=9, loc='lower right')
     ax.grid(alpha=0.3, which='both')
 
@@ -90,21 +91,23 @@ def plot_reco_only(noise_tag, reco_data, output_path, threshold_pct=90.0, x_max=
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--reco_json_1p2mV', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency', 'json'))
-    ap.add_argument('--reco_json_7p5mV', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency_7p5mV_ext511', 'json'))
+    ap.add_argument('--reco_json_1p2mV', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency_1p2mV', 'json'))
+    ap.add_argument('--reco_json_7p5mV', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency_7p5mV', 'json'))
     ap.add_argument('--output_dir', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency'))
     ap.add_argument('--threshold', type=float, default=90.0)
     ap.add_argument('--max_energy', type=float, default=511.0)
     args = ap.parse_args()
 
     dirs = {'1p2mV': args.reco_json_1p2mV, '7p5mV': args.reco_json_7p5mV}
-    for noise_tag, jdir in dirs.items():
-        reco_data = _load_reco(jdir, noise_tag, args.max_energy, method='triexp')
-        if reco_data is None:
-            print(f'No data for {noise_tag}')
-            continue
-        out = os.path.join(args.output_dir, f'reco_efficiency_standalone_{noise_tag}.png')
-        plot_reco_only(noise_tag, reco_data, out, threshold_pct=args.threshold, x_max=args.max_energy)
+    for method in ('triexp', 'maxbase'):
+        for noise_tag, jdir in dirs.items():
+            reco_data = _load_reco(jdir, noise_tag, args.max_energy, method=method)
+            if reco_data is None:
+                print(f'No data for {noise_tag} ({method})')
+                continue
+            suffix = '' if method == 'triexp' else '_maxbase'
+            out = os.path.join(args.output_dir, f'reco_efficiency_standalone{suffix}_{noise_tag}.png')
+            plot_reco_only(noise_tag, reco_data, out, threshold_pct=args.threshold, x_max=args.max_energy, method=method)
 
 
 if __name__ == '__main__':

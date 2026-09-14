@@ -2,8 +2,8 @@
 Combined reconstruction-efficiency + DT-trigger-efficiency plot, before vs
 after DDPM denoising, on a single set of axes per noise level.
 
-Reconstruction efficiency: |ΔE/E| < 7% on the tri-exp fitted amplitude
-  (JSON from plot_efficiency.py).
+Reconstruction efficiency: |ΔE/E| < 5% on the tri-exp fitted amplitude
+  (JSON from plot_efficiency.py; cut changed 7%→5% 2026-09-09, see diary).
 Trigger efficiency: DT (derivative-threshold) trigger fires within the
   search window (JSON from run_dt_trigger.py).
 
@@ -17,8 +17,8 @@ reconstruction (solid, circle) vs trigger (dashed, triangle).
 Usage
 -----
 python scripts/plot_combined_efficiency.py \
-    --reco_json_1p2mV  results/plots/efficiency/json \
-    --reco_json_7p5mV  results/plots/efficiency_7p5mV_ext511/json \
+    --reco_json_1p2mV  results/plots/efficiency_1p2mV/json \
+    --reco_json_7p5mV  results/plots/efficiency_7p5mV/json \
     --trig_json        results/plots/trigger/json \
     --output_dir        results/plots/combined \
     --threshold 90 --max_energy 511
@@ -42,6 +42,17 @@ from src.basics.plot_utils import (logistic4, fit_efficiency_curve,
                                    timestamped_path)
 
 _NOISE_LABELS = {'1p2mV': '1.2 mV', '7p5mV': '7.5 mV'}
+_NOISE_RMS_V  = {'1p2mV': 0.0012, '7p5mV': 0.0075}
+
+
+def _baseline_res_str(noise_tag, k):
+    """Baseline resolution FWHM in keV = 2.355 * noise_rms_V * k — pure
+    numeric conversion using this figure's own calibration slope, no
+    literature framing (that belongs in the paper text)."""
+    rms_v = _NOISE_RMS_V.get(noise_tag)
+    if rms_v is None or k is None:
+        return _NOISE_LABELS.get(noise_tag, noise_tag)
+    return f'baseline resolution = {2.355 * rms_v * k:.2f} keV'
 
 
 # ── data loaders ──────────────────────────────────────────────────────────────
@@ -68,10 +79,12 @@ def _load_reco(json_dir, noise_tag, max_energy, method='triexp'):
     eff_b_key  = f'eff_{method}_before'
     eff_a_key  = f'eff_{method}_after'
     cut_key    = f'energy_cut_{method}'
+    calib_key  = f'calib_{method}_d'
+    k = records[0].get(calib_key, {}).get('k')
     return (np.array([r['energy_kev'] for r in records]),
            np.array([r[eff_b_key]    for r in records]),
            np.array([r[eff_a_key]    for r in records]),
-           records[0][cut_key])
+           records[0][cut_key], k)
 
 
 def _load_trigger(json_dir, noise_tag, max_energy):
@@ -95,7 +108,8 @@ def _load_trigger(json_dir, noise_tag, max_energy):
 def plot_combined(noise_tag, reco_data, trig_data, output_path,
                   threshold_pct=90.0, x_max=511.0, method='triexp'):
     method_label = 'Tri-exp fit' if method == 'triexp' else 'Max-baseline'
-    noise_str = _NOISE_LABELS.get(noise_tag, noise_tag)
+    calib_k = reco_data[4] if reco_data is not None else None
+    noise_str = _baseline_res_str(noise_tag, calib_k)
     fig, ax = plt.subplots(figsize=(9, 6.5))
 
     xlim = (1.0 * 0.7, x_max * 1.4)
@@ -119,7 +133,7 @@ def plot_combined(noise_tag, reco_data, trig_data, output_path,
         return thr
 
     if reco_data is not None:
-        e_r, eff_r_b, eff_r_a, cut = reco_data
+        e_r, eff_r_b, eff_r_a, cut, _k = reco_data
         cut_pct = int(round(cut * 100))
         # "before" reconstruction efficiency at higher noise can show a
         # two-stage shape (slow rise then an abrupt jump) that a single
@@ -158,7 +172,7 @@ def plot_combined(noise_tag, reco_data, trig_data, output_path,
         dt_label = f'  |  DT trigger: nsigma={trig_data[3]:.0f}, n_above={trig_data[4]} samples'
     ax.set_title(
         f'Reconstruction ({method_label}) & Trigger Efficiency vs Energy\n'
-        f'noise RMS = {noise_str}{dt_label}',
+        f'{noise_str}{dt_label}',
         fontsize=11)
     ax.legend(fontsize=8.5, loc='lower right', ncol=1)
     ax.grid(alpha=0.3, which='both')
@@ -177,8 +191,8 @@ def plot_combined(noise_tag, reco_data, trig_data, output_path,
 
 def main():
     parser = argparse.ArgumentParser(description='Combined reconstruction + DT trigger efficiency plot')
-    parser.add_argument('--reco_json_1p2mV', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency', 'json'))
-    parser.add_argument('--reco_json_7p5mV', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency_7p5mV_ext511', 'json'))
+    parser.add_argument('--reco_json_1p2mV', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency_1p2mV', 'json'))
+    parser.add_argument('--reco_json_7p5mV', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency_7p5mV', 'json'))
     parser.add_argument('--trig_json',       default=os.path.join(_RESULTS_DIR, 'plots', 'trigger', 'json'))
     parser.add_argument('--output_dir',      default=os.path.join(_RESULTS_DIR, 'plots', 'combined'))
     parser.add_argument('--threshold',       type=float, default=90.0)

@@ -1,5 +1,6 @@
 """Shared utilities for plot scripts."""
 
+import glob
 import json
 import os
 from datetime import datetime
@@ -96,6 +97,72 @@ def fit_energy_calibration(fit_files: list, which: str = 'noisy',
 
     k, b = np.polyfit(amp_means, energies, 1)
     return float(k), float(b)
+
+
+# 5 gamma-line-like calibration points shared by all scripts that need a
+# single canonical energy calibration (2026-09-10 unification — previously
+# plot_reconstruction_quality.py and plot_efficiency.py each computed their
+# own independent regression and disagreed by ~1%, e.g. 2.20 vs 2.22 keV
+# baseline resolution for the same 1.2mV noise level). Deliberately excludes
+# 3034 keV (the 0vbb ROI — real experiments don't calibrate on the signal
+# region itself).
+CALIB_ENERGIES_KEV = (239.0, 511.0, 727.0, 1461.0, 2615.0)
+
+
+def fit_global_calibration_zero_intercept(fit_dir: str, method: str = 'triexp'):
+    """Global multi-point calibration E = k*Amp, forced through the origin
+    (b=0, so amp=0 <-> E=0 exactly — avoids the free-intercept version's
+    failure mode where a small b fit from high-energy points only
+    extrapolates to large, even negative, predicted energies at low
+    amplitude/low energy).
+
+    Uses the 5 points in CALIB_ENERGIES_KEV, DENOISED Gaussian-fit means
+    (mirrors real experiments calibrating on their best/final-processing
+    amplitude estimator), inverse-variance weighted by the Gaussian fit's
+    own mu_err. Falls back to the raw denoised array's mean/SE when the
+    Gaussian fit didn't converge for a given point.
+
+    method: 'triexp' or 'maxbase'.
+
+    Returns (k [keV/V], residuals) where residuals is a tuple of
+    (E_true, amp, E_pred, resid_keV) for the calibration points actually
+    used, for logging/sanity-checking.
+    """
+    suf_d = 'triexp_denoised' if method == 'triexp' else 'maxbase_denoised'
+    amp_key = 'amp_denoised' if method == 'triexp' else 'amp_maxbase_denoised'
+
+    amps, errs, energies = [], [], []
+    for E in CALIB_ENERGIES_KEV:
+        cands = glob.glob(
+            os.path.join(fit_dir, f'fit_efficiency_{int(round(E))}keV.h5'))
+        if not cands:
+            continue
+        with h5py.File(cands[0], 'r') as f:
+            converged = bool(f.attrs.get(f'gauss_converged_{suf_d}', False))
+            if converged:
+                mu  = float(f.attrs[f'gauss_mu_{suf_d}'])
+                err = float(f.attrs[f'gauss_mu_err_{suf_d}'])
+            else:
+                arr = f[amp_key][:].astype(float)
+                mu  = float(np.nanmean(arr))
+                err = float(np.nanstd(arr) / np.sqrt(np.sum(np.isfinite(arr))))
+        amps.append(mu); errs.append(max(err, 1e-12)); energies.append(E)
+
+    if len(energies) < 2:
+        raise ValueError(
+            f'Not enough calibration points found in {fit_dir} for method={method} '
+            f'(found {len(energies)}/{len(CALIB_ENERGIES_KEV)})')
+
+    amps = np.array(amps); errs = np.array(errs); energies = np.array(energies)
+    w = 1.0 / errs**2
+    # Weighted least squares through the origin: k = sum(w*E*amp) / sum(w*amp^2)
+    k = float(np.sum(w * energies * amps) / np.sum(w * amps**2))
+
+    residuals = tuple(
+        (float(E), float(amp), k * float(amp), k * float(amp) - float(E))
+        for E, amp in zip(energies, amps)
+    )
+    return k, residuals
 
 
 def logistic4(x, L, U, x0, k):

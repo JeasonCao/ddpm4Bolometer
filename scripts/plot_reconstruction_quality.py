@@ -2,8 +2,24 @@
 Plot reconstruction quality: mean reconstructed energy vs true energy,
 with Gaussian-fit error bars, linear fit, and a bias inset.
 
-Calibration per energy point: k = E_true / true_amp_V  (template-based single-point)
-  → E_reco = k × gauss_mu  (peak from Gaussian fit of amplitude distribution)
+Calibration: global multi-point linear regression, CUORE-style, forced
+  through the origin — E = k * Amp (b=0), fit from a handful of high-energy
+  points that stand in for real gamma calibration lines (239/511/727/1461/
+  2615 keV), using the DENOISED Gaussian-mean amplitude, inverse-variance
+  weighted. 3034 keV (0vbb Q-value / signal ROI) is deliberately excluded
+  from the calibration set — a real experiment would not calibrate off its
+  own signal region. One shared k per (noise level, method) is then applied
+  to ALL 17 energy points, noisy and denoised alike.
+  Implementation lives in src/basics/plot_utils.py:
+  fit_global_calibration_zero_intercept(), shared with plot_efficiency.py so
+  both scripts report the same baseline-resolution number for a given noise
+  level (2026-09-10 — previously each had its own independent, non-zero-
+  intercept regression and disagreed by ~1%).
+  (History: per-point private calibration k = E_true/true_amp_V, changed to
+  a free-intercept global regression 2026-09-09, changed to zero-intercept
+  2026-09-10 after a free intercept fit from high-energy points was found to
+  extrapolate to unphysical — even negative — energies at low amplitude.
+  See diary.)
 
 4 figures: 2 noise levels (1p2mV, 7p5mV) × 2 methods (triexp, maxbase).
 X-axis is log scale.
@@ -22,6 +38,7 @@ _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _RESULTS_DIR = os.path.join(_PROJECT_DIR, 'results')
 
 import argparse
+import functools
 import glob
 import h5py
 import numpy as np
@@ -31,29 +48,80 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 _NOISE_LABELS = {'1p2mV': '1.2 mV', '7p5mV': '7.5 mV'}
+_NOISE_RMS_V  = {'1p2mV': 0.0012, '7p5mV': 0.0075}
 
 _METHOD_SUFFIX = {
     'triexp':  ('triexp_noisy',  'triexp_denoised'),
     'maxbase': ('maxbase_noisy', 'maxbase_denoised'),
 }
 
+# Gamma-line-like calibration points (CUORE/CUPID-style: 511 keV e+e-
+# annihilation, 1461 keV K-40, 2615 keV Tl-208, plus 239/727 keV to fill out
+# the low/mid range). 3034 keV (0vbb ROI) intentionally excluded.
+_CALIB_ENERGIES = [239.0, 511.0, 727.0, 1461.0, 2615.0]
+
+
+def _find_file(fit_dir, E):
+    cands = glob.glob(os.path.join(fit_dir, f'fit_efficiency_{int(round(E))}keV.h5'))
+    return cands[0] if cands else None
+
+
+@functools.lru_cache(maxsize=None)
+def _fit_global_calibration(fit_dir, method):
+    """Global multi-point calibration, delegates to the shared zero-intercept
+    implementation in src/basics/plot_utils.py (2026-09-10 unification — this
+    used to be a free-intercept fit computed independently here; a small
+    intercept extrapolated from high-energy calibration points only blew up
+    at low energy, e.g. predicting negative energy at 1 keV, which is why
+    low-energy points were landing outside the plot axes. b is now always 0.
+    Also unifies with plot_efficiency.py, which previously computed its own,
+    different, non-zero-intercept regression over a different point set —
+    the two disagreed by ~1% on the same noise level's baseline resolution.)
+
+    Returns (k, b=0.0, residuals) — signature kept for existing call sites.
+    Prints the residuals once (cached → printed only on first call per
+    (fit_dir, method))."""
+    from src.basics.plot_utils import fit_global_calibration_zero_intercept
+    k, residuals = fit_global_calibration_zero_intercept(fit_dir, method)
+    b = 0.0
+
+    print(f'[calibration] {os.path.basename(fit_dir)} / {method}: '
+          f'k={k:.4g} keV/V, b=0 (forced)  (n_points={len(residuals)})')
+    for E, amp, E_pred, resid in residuals:
+        print(f'    E_true={E:8.1f} keV   amp={amp:.6f} V   '
+              f'E_pred={E_pred:8.2f} keV   resid={resid:+7.3f} keV '
+              f'({resid/E*100:+.3f}%)')
+
+    return k, b, residuals
+
+
+def _baseline_res_str(noise_tag, k):
+    """Baseline resolution FWHM in keV = 2.355 * noise_rms_V * k, purely a
+    numeric conversion from the noise level using this figure's own
+    calibration slope. No literature framing is added here — that
+    belongs in the paper text, not the figure legend."""
+    rms_v = _NOISE_RMS_V.get(noise_tag)
+    if rms_v is None:
+        return _NOISE_LABELS.get(noise_tag, noise_tag)
+    fwhm_kev = 2.355 * rms_v * k
+    return f'baseline resolution = {fwhm_kev:.2f} keV'
+
 
 # ── load Gaussian fit stats from one HDF5 ────────────────────────────────────
 
-def _load_gauss_stats(path, method):
+def _load_gauss_stats(path, method, k, b):
     """
-    Returns dict with keys: E_true, k,
+    Returns dict with keys: E_true, k, b,
       mu_n, mu_err_n, sigma_n, sigma_err_n,
       mu_d, mu_err_d, sigma_d, sigma_err_d
-    All amplitude values multiplied by k → energy units [keV].
+    Amplitude → energy via the shared global calibration E = k*Amp + b
+    (widths/errors scale by k only — b is a location offset, not a scale).
     Falls back to nanmean/nanstd if Gaussian attrs are missing or not converged.
     """
     suf_n, suf_d = _METHOD_SUFFIX[method]
 
     with h5py.File(path, 'r') as f:
         E_true   = float(f.attrs['energy_kev'])
-        true_amp = float(f.attrs['true_amp_V'])
-        k = E_true / true_amp
 
         def _get(suffix):
             converged = bool(f.attrs.get(f'gauss_converged_{suffix}', False))
@@ -79,11 +147,11 @@ def _load_gauss_stats(path, method):
         mu_d, mu_err_d, sigma_d, sig_err_d = _get(suf_d)
 
     return dict(
-        E_true=E_true, k=k,
-        mu_n     = k * mu_n,     mu_err_n  = k * mu_err_n,
-        sigma_n  = k * sigma_n,  sig_err_n = k * sig_err_n,
-        mu_d     = k * mu_d,     mu_err_d  = k * mu_err_d,
-        sigma_d  = k * sigma_d,  sig_err_d = k * sig_err_d,
+        E_true=E_true, k=k, b=b,
+        mu_n     = k * mu_n + b,  mu_err_n  = k * mu_err_n,
+        sigma_n  = k * sigma_n,   sig_err_n = k * sig_err_n,
+        mu_d     = k * mu_d + b,  mu_err_d  = k * mu_err_d,
+        sigma_d  = k * sigma_d,   sig_err_d = k * sig_err_d,
     )
 
 
@@ -91,13 +159,15 @@ def _load_all(fit_dir, method):
     files = sorted(glob.glob(os.path.join(fit_dir, 'fit_efficiency_*.h5')))
     if not files:
         return None
-    rows = [_load_gauss_stats(p, method) for p in files]
+    k, b, _residuals = _fit_global_calibration(fit_dir, method)
+    rows = [_load_gauss_stats(p, method, k, b) for p in files]
     rows.sort(key=lambda r: r['E_true'])
 
     def arr(key):
         return np.array([r[key] for r in rows])
 
     return dict(
+        k=k, b=b,
         E_true   = arr('E_true'),
         mu_n     = arr('mu_n'),    mu_err_n  = arr('mu_err_n'),
         sigma_n  = arr('sigma_n'), sig_err_n = arr('sig_err_n'),
@@ -132,12 +202,12 @@ def _pad_ylim(values, pad_frac=0.15, clip=80):
 
 def plot_quality(fit_dir, method, output_path):
     noise_tag = os.path.basename(fit_dir).replace('efficiency_', '')
-    noise_str = _NOISE_LABELS.get(noise_tag, noise_tag)
     method_label = 'Tri-exp fit' if method == 'triexp' else 'Max-baseline'
 
     d = _load_all(fit_dir, method)
     if d is None:
         print(f'No files found in {fit_dir}'); return
+    noise_str = _baseline_res_str(noise_tag, d['k'])
 
     E_true  = d['E_true']
     mu_n    = d['mu_n']
@@ -177,7 +247,7 @@ def plot_quality(fit_dir, method, output_path):
     ax.set_ylabel('Reconstructed energy (keV)', fontsize=11)
     ax.set_title(
         f'Reconstruction Quality — {method_label}\n'
-        f'noise RMS = {noise_str},  error bars from Gaussian fit of amplitude dist.',
+        f'{noise_str},  error bars from Gaussian fit of amplitude dist.',
         fontsize=10.5
     )
     ax.legend(fontsize=8.5, loc='upper left')
@@ -226,12 +296,12 @@ def plot_quality(fit_dir, method, output_path):
 
 def plot_bias(fit_dir, method, output_path):
     noise_tag    = os.path.basename(fit_dir).replace('efficiency_', '')
-    noise_str    = _NOISE_LABELS.get(noise_tag, noise_tag)
     method_label = 'Tri-exp fit' if method == 'triexp' else 'Max-baseline'
 
     d = _load_all(fit_dir, method)
     if d is None:
         return
+    noise_str = _baseline_res_str(noise_tag, d['k'])
 
     E_true = d['E_true']
     bias_n     = (d['mu_n'] - E_true) / E_true * 100
@@ -257,7 +327,7 @@ def plot_bias(fit_dir, method, output_path):
     ax.set_xlabel('True energy (keV)', fontsize=10)
     ax.set_ylabel('Bias (%)', fontsize=10)
     ax.set_title(
-        f'Reconstruction Bias — {method_label}  |  noise RMS = {noise_str}\n'
+        f'Reconstruction Bias — {method_label}  |  {noise_str}\n'
         f'Bias = (reco − true) / true × 100,  error bars from Gaussian fit',
         fontsize=10)
     ax.legend(fontsize=9)
@@ -269,12 +339,12 @@ def plot_bias(fit_dir, method, output_path):
 
 def plot_resolution_fwhm(fit_dir, method, output_path):
     noise_tag    = os.path.basename(fit_dir).replace('efficiency_', '')
-    noise_str    = _NOISE_LABELS.get(noise_tag, noise_tag)
     method_label = 'Tri-exp fit' if method == 'triexp' else 'Max-baseline'
 
     d = _load_all(fit_dir, method)
     if d is None:
         return
+    noise_str = _baseline_res_str(noise_tag, d['k'])
 
     E_true  = d['E_true']
     fwhm_n  = 2.355 * d['sigma_n']
@@ -295,7 +365,7 @@ def plot_resolution_fwhm(fit_dir, method, output_path):
     ax.set_xlabel('True energy (keV)', fontsize=10)
     ax.set_ylabel('Energy resolution FWHM (keV)', fontsize=10)
     ax.set_title(
-        f'Energy Resolution — {method_label}  |  noise RMS = {noise_str}\n'
+        f'Energy Resolution — {method_label}  |  {noise_str}\n'
         f'FWHM = 2.355 × σ_Gauss,  error bars from Gaussian fit',
         fontsize=10)
     ax.legend(fontsize=9)
@@ -307,12 +377,12 @@ def plot_resolution_fwhm(fit_dir, method, output_path):
 
 def plot_resolution_pct(fit_dir, method, output_path):
     noise_tag    = os.path.basename(fit_dir).replace('efficiency_', '')
-    noise_str    = _NOISE_LABELS.get(noise_tag, noise_tag)
     method_label = 'Tri-exp fit' if method == 'triexp' else 'Max-baseline'
 
     d = _load_all(fit_dir, method)
     if d is None:
         return
+    noise_str = _baseline_res_str(noise_tag, d['k'])
 
     E_true = d['E_true']
     fwhm_pct_n     = 2.355 * d['sigma_n']     / E_true * 100
@@ -333,7 +403,7 @@ def plot_resolution_pct(fit_dir, method, output_path):
     ax.set_xlabel('True energy (keV)', fontsize=10)
     ax.set_ylabel('Energy resolution FWHM / E  (%)', fontsize=10)
     ax.set_title(
-        f'Relative Energy Resolution — {method_label}  |  noise RMS = {noise_str}\n'
+        f'Relative Energy Resolution — {method_label}  |  {noise_str}\n'
         f'FWHM(%) = 2.355 × σ_Gauss / E_true × 100,  error bars from Gaussian fit',
         fontsize=10)
     ax.legend(fontsize=9)
@@ -345,11 +415,14 @@ def plot_resolution_pct(fit_dir, method, output_path):
 
 def plot_pearsonr(fit_dir, output_path):
     noise_tag = os.path.basename(fit_dir).replace('efficiency_', '')
-    noise_str = _NOISE_LABELS.get(noise_tag, noise_tag)
 
     files = sorted(glob.glob(os.path.join(fit_dir, 'fit_efficiency_*.h5')))
     if not files:
         return
+    # Pearson r is unitless/method-agnostic; use the tri-exp calibration slope
+    # (the primary method) just to express the noise level as baseline resolution.
+    k_triexp, _b, _res = _fit_global_calibration(fit_dir, 'triexp')
+    noise_str = _baseline_res_str(noise_tag, k_triexp)
 
     rows = []
     for path in files:
@@ -390,7 +463,7 @@ def plot_pearsonr(fit_dir, output_path):
     ax.set_ylabel('Mean Pearson r', fontsize=10)
     ax.set_title(
         f'Fit–Template Pearson Correlation vs Energy\n'
-        f'r(tri-exp fit curve, clean template)  |  noise RMS = {noise_str}\n'
+        f'r(tri-exp fit curve, clean template)  |  {noise_str}\n'
         f'(NaN for failed fits excluded from mean; shaded band = ±1σ)',
         fontsize=10)
     ax.legend(fontsize=9)

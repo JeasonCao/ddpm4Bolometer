@@ -4,8 +4,10 @@ Plot small-signal reconstruction efficiency: before vs after DDPM denoising.
 Processes all fit files in a directory.  Multi-point energy calibration
 (E [keV] = k·amp + b, separate for noisy/denoised × tri-exp/max-baseline)
 is used to convert amplitudes to energy before computing efficiency metrics.
-The ~7% tri-exp systematic bias is absorbed by the calibration fit, so the
-energy-domain cut can be set to the same value as the max-baseline cut.
+(Historical note: before the 2026-09-09 run_fitting.py baseline-bug fix, the
+tri-exp fit carried a spurious ~5.3-5.9% systematic bias, absorbed by the
+calibration fit; the true intrinsic bias is ~0.02-0.04%, see diary. The
+energy-domain cut is set to the same value as the max-baseline cut either way.)
 
 Layout (one figure per energy point)
 ------
@@ -32,7 +34,7 @@ Usage
 -----
 python scripts/plot_efficiency.py \\
     --fit_dir   results/fit_results/efficiency_1p2mV \\
-    --model_cfg /home/wsl_0vbb/DDPM4bolometer/model_output_cloud
+    --model_cfg /mnt/d/storage/research/DDPM4bolometer/model_output_cloud
 """
 
 import sys
@@ -47,13 +49,13 @@ import argparse
 import glob
 import h5py
 import numpy as np
-from src.basics.plot_utils import suffix_from_model_dir, fit_energy_calibration
+from src.basics.plot_utils import suffix_from_model_dir
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-DEFAULT_ENERGY_CUT_TRIEXP  = 0.07   # 7%: bias absorbed by energy calibration
-DEFAULT_ENERGY_CUT_MAXBASE = 0.07   # 7%: unbiased estimator
+DEFAULT_ENERGY_CUT_TRIEXP  = 0.05   # 5%: bias absorbed by energy calibration
+DEFAULT_ENERGY_CUT_MAXBASE = 0.05   # 5%: unbiased estimator
 DEFAULT_CORR_MIN           = 0.90
 
 
@@ -81,13 +83,32 @@ def bar_pair(ax, val_n, val_d, title, ylabel='Rate (%)'):
 
 # ── calibration ───────────────────────────────────────────────────────────────
 
-def compute_calibrations(fit_files):
-    """Compute 4 energy calibrations from all fit files in the directory."""
+def compute_calibrations(fit_dir):
+    """Compute energy calibrations, shared with plot_reconstruction_quality.py
+    (2026-09-10 unification — this used to run its own independent
+    fit_energy_calibration() over all files <=max_energy, unweighted, free
+    intercept, noisy and denoised each fit separately; that disagreed by
+    ~1% with plot_reconstruction_quality.py's calibration for the same
+    noise level, e.g. 2.20 vs 2.22 keV baseline resolution at 1.2mV).
+
+    Now uses the same 5-point (239/511/727/1461/2615 keV) zero-intercept,
+    inverse-variance-weighted regression from src/basics/plot_utils.py,
+    fit once on DENOISED data and shared between noisy and denoised curves
+    — mirrors how a real experiment calibrates once, on its best/final
+    processing, and applies that single calibration to everything,
+    including the before/after comparison. b is always 0.
+
+    Returns the same 4-key dict shape as before ('triexp_n'/'triexp_d'/
+    'maxbase_n'/'maxbase_d' -> (k, b)) so downstream code needs no changes.
+    """
+    from src.basics.plot_utils import fit_global_calibration_zero_intercept
+    k_triexp,  _res_t = fit_global_calibration_zero_intercept(fit_dir, method='triexp')
+    k_maxbase, _res_m = fit_global_calibration_zero_intercept(fit_dir, method='maxbase')
     return {
-        'triexp_n':  fit_energy_calibration(fit_files, which='noisy',    use_maxbase=False),
-        'triexp_d':  fit_energy_calibration(fit_files, which='denoised', use_maxbase=False),
-        'maxbase_n': fit_energy_calibration(fit_files, which='noisy',    use_maxbase=True),
-        'maxbase_d': fit_energy_calibration(fit_files, which='denoised', use_maxbase=True),
+        'triexp_n':  (k_triexp,  0.0),
+        'triexp_d':  (k_triexp,  0.0),
+        'maxbase_n': (k_maxbase, 0.0),
+        'maxbase_d': (k_maxbase, 0.0),
     }
 
 
@@ -293,8 +314,9 @@ def run(fit_dir, out_dir, suffix, energy_cut_triexp, energy_cut_maxbase, corr_mi
             print(f"No fit files with energy_kev <= {max_energy}")
             return
 
-    print(f"Computing energy calibrations from {len(fit_files)} files …")
-    calibs = compute_calibrations(fit_files)
+    print(f"Computing energy calibrations (5-point zero-intercept, shared with "
+          f"plot_reconstruction_quality.py) from {fit_dir} …")
+    calibs = compute_calibrations(fit_dir)
     for tag, (k, b) in calibs.items():
         print(f"  {tag:12s}: k={k:.2f} keV/V, b={b:.2f} keV")
 
