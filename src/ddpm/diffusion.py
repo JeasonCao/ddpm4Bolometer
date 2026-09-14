@@ -287,6 +287,112 @@ class GaussianDiffusion(nn.Module):
         return x_t
 
     @torch.no_grad()
+    def ddim_sample_warmstart(self, x_tilde: torch.Tensor,
+                              t_start: int,
+                              scale: torch.Tensor = None,
+                              steps: int = None,
+                              eta: float = 0.0) -> torch.Tensor:
+        """SDEdit-style warm-start DDIM sampling (added 2026-09-10).
+
+        Standard `ddim_sample()` always starts the reverse trajectory from
+        pure noise at t=T-1 (`x_t = torch.randn(...)`), even though the
+        actual noisy observation `x_tilde` already IS a noisy version of the
+        true signal — the model has to synthesize the entire pulse shape
+        from scratch every time, only guided by conditioning on x_tilde.
+
+        This variant instead treats x_tilde as a proxy for x_0 and re-noises
+        it forward to an intermediate step t_start via the same q_sample()
+        formula used in training (`x_t = sqrt(alpha_bar_t)*x_0 +
+        sqrt(1-alpha_bar_t)*eps`), then runs the ordinary DDIM reverse loop
+        from t_start down to 0. No retraining needed — the model was
+        already trained to denoise from every intermediate t (training
+        samples t uniformly over the full range), so this only changes
+        *where inference starts*, not what the network has learned.
+
+        Rationale for trying this: at t=T-1 the model has maximum freedom to
+        invent structure (including possible spurious high-frequency
+        content that a linear filter could never produce), since almost
+        none of the true signal survives forward diffusion to t=T-1. A
+        smaller t_start means less of that "generation from nothing" phase,
+        which is the working hypothesis for why the denoised PSD shows a
+        high-frequency floor (see 2026-09-10 diary discussion). t_start=T-1
+        with steps=T reduces to the original cold-start ddim_sample().
+
+        Parameters
+        ----------
+        x_tilde : (B, 1, L) — noisy observation, same per-window
+            peak-normalized-to-[-1,1] convention as the rest of the
+            inference pipeline (see run_batch_inference.denoise_batch).
+        t_start : int — 0-indexed schedule step to start from. Smaller =
+            less generative freedom, closer to "pure filtering"; too small
+            risks not having enough steps to remove the real noise still
+            present in x_tilde. Must choose per how noisy the input
+            actually is (see choose_warmstart_t in scripts/infer_warmstart.py).
+        scale : (B,) — optional scale conditioning (unused by the currently
+            trained model, kept for API parity with ddim_sample).
+        steps : int — number of DDIM steps between t_start and 0 (default:
+            t_start + 1, i.e. no further step-skipping on top of the
+            warm start itself).
+        eta : float — 0 = deterministic DDIM (matches production default).
+
+        Returns
+        -------
+        x_0 : (B, 1, L) — denoised signal
+        """
+        if not (0 <= t_start <= self.T - 1):
+            raise ValueError(f't_start={t_start} out of range [0, {self.T - 1}]')
+        if steps is None:
+            steps = t_start + 1
+        device = x_tilde.device
+        B = x_tilde.shape[0]
+
+        # SDEdit re-noising: treat x_tilde as x_0, forward-diffuse to t_start.
+        # Uses the SAME formula training used (q_sample), so the resulting
+        # x_t is statistically the kind of input the model was trained to
+        # see at this step -- no train/inference distribution mismatch,
+        # unlike e.g. feeding band-limited noise (see diary discussion).
+        t_start_batch = torch.full((B,), t_start, device=device, dtype=torch.long)
+        x_t = self.q_sample(x_tilde, t_start_batch)
+
+        tau = torch.linspace(t_start, 0, steps, device=device).long()
+
+        for i in range(len(tau)):
+            t_cur = tau[i]
+            if self.cond_mode == 'sqrt_ab':
+                cond = self.schedule.sqrt_alpha_bar[t_cur].expand(B)
+            else:
+                cond = torch.full((B,), t_cur + 1, device=device, dtype=torch.long)
+
+            eps_pred = self._predict_noise(x_t, x_tilde, cond, scale)
+
+            alpha_bar_t = self.schedule.alpha_bar[t_cur]
+            sqrt_ab_t = self.schedule.sqrt_alpha_bar[t_cur]
+            sqrt_1_ab_t = self.schedule.sqrt_one_minus_alpha_bar[t_cur]
+
+            x0_pred = (x_t - sqrt_1_ab_t * eps_pred) / sqrt_ab_t
+
+            if i < len(tau) - 1:
+                t_next = tau[i + 1]
+                alpha_bar_next = self.schedule.alpha_bar[t_next]
+                sqrt_ab_next = self.schedule.sqrt_alpha_bar[t_next]
+
+                sigma = eta * torch.sqrt(
+                    (1 - alpha_bar_next) / (1 - alpha_bar_t)
+                    * (1 - alpha_bar_t / alpha_bar_next)
+                )
+                dir_xt = torch.sqrt(
+                    torch.clamp(1 - alpha_bar_next - sigma ** 2, min=0.0)
+                ) * eps_pred
+
+                x_t = sqrt_ab_next * x0_pred + dir_xt
+                if eta > 0:
+                    x_t = x_t + sigma * torch.randn_like(x_t)
+            else:
+                x_t = x0_pred
+
+        return x_t
+
+    @torch.no_grad()
     def sample_multi_shot(self, x_tilde: torch.Tensor,
                           scale: torch.Tensor = None,
                           M: int = 10,
