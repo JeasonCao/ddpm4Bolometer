@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, random_split
 
 from src.ddpm.schedule import DiffusionSchedule
-from src.ddpm.unet import UNet1D
+from src.ddpm.unet import build_ddpm_model
 from src.ddpm.diffusion import GaussianDiffusion
 from src.ddpm.dataset import PulseNoiseDataset
 
@@ -70,12 +70,20 @@ def main():
     parser.add_argument('--compile', action='store_true',
                         help='Use torch.compile for kernel fusion (first epoch slower)')
     parser.add_argument('--scale_cond', action='store_true',
-                        help='Use scale-conditioned U-Net (UNet1DScaleCond)')
+                        help='Legacy scale-conditioned U-Net (UNet1DScaleCond); '
+                             'only for old checkpoints such as ddpm_scale_cond/')
+    parser.add_argument('--scale_emb', action='store_true',
+                        help='UNet1D conditioned on the normalization scale '
+                             'max(|noisy|) (log10 Fourier-feature embedding)')
+    parser.add_argument('--film', action='store_true',
+                        help='AdaGN/FiLM conditioning in every ResBlock instead '
+                             'of an additive bias')
     parser.add_argument('--subset', type=str, default=None,
                         help='Filter training data by precomputed index category '
                              '(e.g., pileup, low_100, pileup_low_100, pileup_low_200). '
                              'Requires running preprocess_index.py first.')
     args = parser.parse_args()
+    use_scale = args.scale_cond or args.scale_emb
 
     torch.manual_seed(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -116,15 +124,12 @@ def main():
     schedule = DiffusionSchedule(T=args.T, beta_1=args.beta_1, beta_T=args.beta_T).to(device)
     print(f"Schedule: T={args.T}, beta_1={args.beta_1}, beta_T={args.beta_T}, "
           f"alpha_bar_T={schedule.alpha_bar[-1].item():.4g}")
-    if args.scale_cond:
-        from src.ddpm.unet_cond import UNet1DScaleCond
-        model = UNet1DScaleCond(cond_mode=args.cond_mode,
-                                cond_scale=args.cond_scale).to(device)
-        print(f"Using scale-conditioned U-Net (UNet1DScaleCond), cond_mode={args.cond_mode}")
-    else:
-        model = UNet1D(cond_mode=args.cond_mode,
-                       cond_scale=args.cond_scale).to(device)
-        print(f"Using UNet1D, cond_mode={args.cond_mode}")
+    model = build_ddpm_model(cond_mode=args.cond_mode, cond_scale=args.cond_scale,
+                             scale_cond=args.scale_emb, film=args.film,
+                             legacy_scale_cond=args.scale_cond).to(device)
+    print(f"Using {type(model).__name__}, cond_mode={args.cond_mode}, "
+          f"legacy_scale_cond={args.scale_cond}, scale_emb={args.scale_emb}, "
+          f"film={args.film}")
 
     # Spectral loss (if any weights are nonzero)
     spec_loss = None
@@ -221,7 +226,7 @@ def main():
         for x_clean, x_noisy, batch_scale in train_loader:
             x_clean = x_clean.to(device)
             x_noisy = x_noisy.to(device)
-            sc = batch_scale.to(device) if args.scale_cond else None
+            sc = batch_scale.to(device) if use_scale else None
 
             with autocast_ctx():
                 result = diffusion.training_loss(x_clean, x_noisy, scale=sc)
@@ -265,7 +270,7 @@ def main():
             for x_clean, x_noisy, batch_scale in val_loader:
                 x_clean = x_clean.to(device)
                 x_noisy = x_noisy.to(device)
-                sc = batch_scale.to(device) if args.scale_cond else None
+                sc = batch_scale.to(device) if use_scale else None
                 with autocast_ctx():
                     result = diffusion.training_loss(x_clean, x_noisy, scale=sc)
                     if use_spectral:

@@ -165,6 +165,40 @@ params = sample_noise_params(rng)
 noise = generate_noise(rng, params)        # all components summed, no scale
 ```
 
+### Channel bank (multi-channel foundation model)
+
+For the foundation-model denoiser, noise is organized into **channels**: each
+channel is one shard whose noise **identity is fixed** — the PSD parameters from
+`sample_noise_params`, *and* the periodic/white mix `r` and overall `scale`
+(drawn once per channel). Only the random **realization** of each component
+varies per window. One channel ↔ one shard (`noise_NNN.h5`), matching the clean
+bank's `channel_id == shard index`.
+
+Fixing `r` and `scale` per channel (rather than per window, as in flat mode)
+makes the channel's periodic-vs-white balance and absolute noise floor stable
+traits, so a channel sits at a characteristic SNR for a given event energy. The
+training dataset normalizes each window by `max(|noisy|)`, which divides out
+overall amplitude regardless; what a fixed noise floor really pins down is the
+**SNR-vs-energy relationship**, and that becomes part of the channel identity
+the channel token learns.
+
+```bash
+# 100 channels x 200 windows each
+python3 -u scripts/generate_noise_shards.py \
+    --n_channels 100 --windows_per_channel 200 \
+    --output_dir /media/Disk_YIN/yunshancheng/cuore/channel_bank/noise \
+    --base_seed 42
+```
+
+The three families (`noise_periodic/`, `noise_white/`, `noise_total/`) are still
+produced; the denoiser trains on `noise_total/`. Each shard stamps `channel_id`
+and the fixed scalar noise params as `param_<key>` attributes (`target_rms`,
+`alpha`, `f_cross`, `ac_a_base`, `ac_p_decay`, `pt_freq`, `pt_a_base`,
+`pt_p_decay`, `white_rms`, `envelope_variation`, plus `param_n_resonances`),
+as well as the fixed mix `param_mix_r` and `param_mix_scale`. Generation is
+resumable and each channel uses an independent RNG stream spawned from
+`--base_seed`.
+
 ### QA visualization
 
 ```bash

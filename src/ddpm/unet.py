@@ -77,22 +77,76 @@ class TimestepMLP(nn.Module):
         return self.mlp(self.embed(t))  # (B, emb_dim)
 
 
+class ScaleEmbedding(nn.Module):
+    """Normalization scale max(|noisy|) -> conditioning vector.
+
+    log10(scale) is mapped linearly so that ``log10_range`` (default 10 mV to
+    10 V, the span of noise-only to MeV windows) lands on [-1, 1]; values
+    outside are not clamped. Fourier features [x, sin(pi 2^k x), cos(pi 2^k x)]
+    then feed a 2-layer MLP. Unlike the legacy UNet1DScaleCond (integer-step
+    sinusoidal table on 10*ln(scale)), the frequencies are matched to the input
+    range: the finest one repeats every ~0.09 decades (k = 5), coarser ones
+    keep the encoding unique over the whole range.
+    """
+
+    def __init__(self, emb_dim: int = 256, n_freqs: int = 6,
+                 log10_range: tuple = (-2.0, 1.0)):
+        super().__init__()
+        lo, hi = log10_range
+        self.center = 0.5 * (lo + hi)
+        self.half_width = 0.5 * (hi - lo)
+        self.register_buffer(
+            'freqs', math.pi * 2.0 ** torch.arange(n_freqs, dtype=torch.float32),
+            persistent=False,
+        )
+        self.mlp = nn.Sequential(
+            nn.Linear(1 + 2 * n_freqs, emb_dim * 4),
+            nn.SiLU(),
+            nn.Linear(emb_dim * 4, emb_dim),
+        )
+
+    def forward(self, scale: torch.Tensor) -> torch.Tensor:
+        """scale : (B,) max(|noisy|) in V -> (B, emb_dim)"""
+        x = (torch.log10(scale.float().clamp(min=1e-8)) - self.center) / self.half_width
+        args = x.unsqueeze(1) * self.freqs.unsqueeze(0)  # (B, n_freqs)
+        feats = torch.cat([x.unsqueeze(1), torch.sin(args), torch.cos(args)], dim=1)
+        return self.mlp(feats)
+
+
 class ResBlock1D(nn.Module):
     """Residual block: Conv -> GroupNorm -> SiLU -> Conv -> GroupNorm -> SiLU + skip.
 
-    Timestep conditioning is added after the first GroupNorm+SiLU.
+    Conditioning (timestep [+ channel token] [+ scale]) enters in one of two ways:
+      - film=False (default): a per-channel bias added after the first
+        GroupNorm+SiLU. The embedding can only shift activations.
+      - film=True (AdaGN, as in improved DDPM / ADM): the embedding is mapped
+        through SiLU -> Linear to per-channel (gamma, beta), and the second
+        GroupNorm becomes GN(h) * (1 + gamma) + beta. The embedding can then
+        also scale features, i.e. modulate them multiplicatively -- needed for
+        e.g. "suppress input detail when scale is small (noise-dominated)".
+        The projection is zero-initialized so every block starts as a plain
+        GroupNorm (gamma = beta = 0) and conditioning is learned as a delta.
     """
 
-    def __init__(self, in_ch: int, out_ch: int, emb_dim: int = 256, num_groups: int = 8):
+    def __init__(self, in_ch: int, out_ch: int, emb_dim: int = 256, num_groups: int = 8,
+                 film: bool = False):
         super().__init__()
         self.conv1 = nn.Conv1d(in_ch, out_ch, kernel_size=3, padding=1)
         self.norm1 = nn.GroupNorm(num_groups, out_ch)
         self.conv2 = nn.Conv1d(out_ch, out_ch, kernel_size=3, padding=1)
         self.norm2 = nn.GroupNorm(num_groups, out_ch)
         self.act = nn.SiLU()
+        self.film = film
 
-        # Timestep projection
-        self.t_proj = nn.Linear(emb_dim, out_ch)
+        if film:
+            # AdaGN projection -> (gamma, beta). Separate attribute name from
+            # t_proj so additive and FiLM state dicts never load into each other.
+            self.film_proj = nn.Sequential(nn.SiLU(), nn.Linear(emb_dim, 2 * out_ch))
+            nn.init.zeros_(self.film_proj[1].weight)
+            nn.init.zeros_(self.film_proj[1].bias)
+        else:
+            # Timestep projection
+            self.t_proj = nn.Linear(emb_dim, out_ch)
 
         # Residual connection (1x1 conv if channels change)
         self.skip = nn.Conv1d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
@@ -100,12 +154,16 @@ class ResBlock1D(nn.Module):
     def forward(self, x: torch.Tensor, t_emb: torch.Tensor) -> torch.Tensor:
         """
         x : (B, C, L)
-        t_emb : (B, emb_dim)
+        t_emb : (B, emb_dim) — combined conditioning embedding
         """
         h = self.act(self.norm1(self.conv1(x)))
-        # Add timestep embedding
-        h = h + self.t_proj(t_emb).unsqueeze(-1)  # (B, out_ch, 1) broadcast
-        h = self.act(self.norm2(self.conv2(h)))
+        if self.film:
+            gamma, beta = self.film_proj(t_emb).unsqueeze(-1).chunk(2, dim=1)
+            h = self.act(self.norm2(self.conv2(h)) * (1 + gamma) + beta)
+        else:
+            # Add timestep embedding
+            h = h + self.t_proj(t_emb).unsqueeze(-1)  # (B, out_ch, 1) broadcast
+            h = self.act(self.norm2(self.conv2(h)))
         return h + self.skip(x)
 
 
@@ -175,6 +233,23 @@ class UNet1D(nn.Module):
         Input multiplier applied before sinusoidal embedding when
         cond_mode='sqrt_ab'. Spreads the (0, 1] input across the
         sinusoidal frequency grid. Ignored when cond_mode='step'.
+    n_channels : int or None
+        If set, enable per-channel conditioning for the multi-channel
+        foundation-model denoiser: a learned channel-token embedding (one row
+        per channel) is added to the timestep embedding, so it reaches every
+        ResBlock through the existing conditioning pathway. None (default)
+        keeps the original single-channel behavior (no channel token). See
+        ``src/ddpm/README.md`` (foundation-model section).
+    scale_cond : bool
+        If True, condition on the normalization scale max(|noisy|) via
+        ``ScaleEmbedding``; its embedding is added to the timestep embedding
+        and ``forward`` then requires ``scale``. Supersedes the separate
+        ``UNet1DScaleCond`` class (kept only to load old checkpoints).
+    film : bool
+        If True, every ResBlock uses AdaGN (FiLM) conditioning instead of an
+        additive bias; see ``ResBlock1D``. Independent of ``scale_cond``.
+    scale_log10_range : tuple
+        log10(scale [V]) interval mapped onto [-1, 1] by ``ScaleEmbedding``.
     """
 
     def __init__(
@@ -187,14 +262,37 @@ class UNet1D(nn.Module):
         attn_levels: tuple = (),
         cond_mode: str = 'step',
         cond_scale: float = 1000.0,
+        n_channels: int = None,
+        scale_cond: bool = False,
+        film: bool = False,
+        scale_log10_range: tuple = (-2.0, 1.0),
     ):
         super().__init__()
         self.n_levels = len(channel_mults)
         self.cond_mode = cond_mode
+        self.scale_cond = scale_cond
+        self.film = film
         channels = [base_channels * m for m in channel_mults]  # [64, 128, 256, 512]
 
         # Timestep embedding
         self.time_mlp = TimestepMLP(emb_dim, cond_mode=cond_mode, cond_scale=cond_scale)
+
+        # Optional per-channel conditioning (Tier-1 channel token). One learned
+        # embedding row per channel, added to the timestep embedding. Zero-init
+        # so an untrained / held-out channel starts from the channel-agnostic
+        # ("null") behavior and fine-tuning only learns a delta on top of the
+        # frozen backbone. Swap this module for FiLM / LoRA for higher tiers.
+        self.n_channels = n_channels
+        if n_channels is not None:
+            self.channel_emb = nn.Embedding(n_channels, emb_dim)
+            nn.init.zeros_(self.channel_emb.weight)
+        else:
+            self.channel_emb = None
+
+        # Optional normalization-scale conditioning, added to the timestep
+        # embedding like the channel token.
+        self.scale_emb = (ScaleEmbedding(emb_dim, log10_range=scale_log10_range)
+                          if scale_cond else None)
 
         # Initial projection
         self.conv_in = nn.Conv1d(in_channels, channels[0], kernel_size=3, padding=1)
@@ -208,8 +306,8 @@ class UNet1D(nn.Module):
             ch_in = channels[i - 1] if i > 0 else channels[0]
             ch_out = channels[i]
             self.enc_blocks.append(nn.ModuleList([
-                ResBlock1D(ch_in, ch_out, emb_dim),
-                ResBlock1D(ch_out, ch_out, emb_dim),
+                ResBlock1D(ch_in, ch_out, emb_dim, film=film),
+                ResBlock1D(ch_out, ch_out, emb_dim, film=film),
             ]))
             if i in attn_levels:
                 self.enc_attns.append(SelfAttention1D(ch_out))
@@ -223,9 +321,9 @@ class UNet1D(nn.Module):
 
         # ---- Bottleneck ----
         mid_ch = channels[-1]
-        self.mid_block1 = ResBlock1D(mid_ch, mid_ch, emb_dim)
+        self.mid_block1 = ResBlock1D(mid_ch, mid_ch, emb_dim, film=film)
         self.mid_attn = SelfAttention1D(mid_ch)
-        self.mid_block2 = ResBlock1D(mid_ch, mid_ch, emb_dim)
+        self.mid_block2 = ResBlock1D(mid_ch, mid_ch, emb_dim, film=film)
 
         # ---- Decoder ----
         self.dec_blocks = nn.ModuleList()
@@ -243,8 +341,8 @@ class UNet1D(nn.Module):
                 ch_target = channels[0]
 
             self.dec_blocks.append(nn.ModuleList([
-                ResBlock1D(ch_in, ch_out, emb_dim),
-                ResBlock1D(ch_out, ch_target, emb_dim),
+                ResBlock1D(ch_in, ch_out, emb_dim, film=film),
+                ResBlock1D(ch_out, ch_target, emb_dim, film=film),
             ]))
 
             if i in attn_levels:
@@ -269,6 +367,8 @@ class UNet1D(nn.Module):
         x_t: torch.Tensor,
         x_tilde: torch.Tensor,
         t: torch.Tensor,
+        channel_id: torch.Tensor = None,
+        scale: torch.Tensor = None,
     ) -> torch.Tensor:
         """
         Parameters
@@ -277,6 +377,10 @@ class UNet1D(nn.Module):
         x_tilde : (B, 1, L) — noisy observation (conditioning)
         t : (B,) — step indices (1..T) if cond_mode='step',
             continuous sqrt(alpha_bar) values if cond_mode='sqrt_ab'
+        channel_id : (B,) long or None — channel index for the channel-token
+            embedding. Ignored unless the model was built with n_channels.
+        scale : (B,) or None — max(|noisy|) before normalization [V].
+            Required if the model was built with scale_cond.
 
         Returns
         -------
@@ -284,7 +388,17 @@ class UNet1D(nn.Module):
         """
         # Concatenate input and condition
         x = torch.cat([x_t, x_tilde], dim=1)  # (B, 2, L)
-        t_emb = self.time_mlp(t)  # (B, emb_dim)
+        cond = self.time_mlp(t)  # (B, emb_dim)
+
+        # Add the per-channel token (foundation-model conditioning)
+        if self.channel_emb is not None and channel_id is not None:
+            cond = cond + self.channel_emb(channel_id)
+
+        # Add the normalization-scale embedding
+        if self.scale_emb is not None:
+            if scale is None:
+                raise ValueError("model built with scale_cond=True needs `scale`")
+            cond = cond + self.scale_emb(scale)
 
         # Initial conv
         h = self.conv_in(x)
@@ -293,16 +407,16 @@ class UNet1D(nn.Module):
         skips = []
         for i in range(self.n_levels):
             for block in self.enc_blocks[i]:
-                h = block(h, t_emb)
+                h = block(h, cond)
             h = self.enc_attns[i](h)
             skips.append(h)
             if i < self.n_levels - 1:
                 h = self.enc_downsamples[i](h)
 
         # Bottleneck
-        h = self.mid_block1(h, t_emb)
+        h = self.mid_block1(h, cond)
         h = self.mid_attn(h)
-        h = self.mid_block2(h, t_emb)
+        h = self.mid_block2(h, cond)
 
         # Decoder
         for j, i in enumerate(reversed(range(self.n_levels))):
@@ -313,11 +427,31 @@ class UNet1D(nn.Module):
             h = torch.cat([h, skip], dim=1)
 
             res1, res2 = self.dec_blocks[j]
-            h = res1(h, t_emb)
+            h = res1(h, cond)
             h = self.dec_attns[j](h)
-            h = res2(h, t_emb)
+            h = res2(h, cond)
 
             if i > 0:
                 h = self.dec_upsamples[j](h)
 
         return self.conv_out(h)
+
+
+def build_ddpm_model(cond_mode: str = 'step', cond_scale: float = 1000.0,
+                     scale_cond: bool = False, film: bool = False,
+                     legacy_scale_cond: bool = False) -> nn.Module:
+    """Construct the main-DDPM U-Net from CLI/config flags.
+
+    ``legacy_scale_cond`` builds the old ``UNet1DScaleCond`` (additive
+    10*ln(scale) sinusoidal embedding) so pre-existing ``--scale_cond``
+    checkpoints such as ddpm_scale_cond/ still load; it cannot be combined
+    with the new options.
+    """
+    if legacy_scale_cond:
+        if scale_cond or film:
+            raise ValueError("legacy scale conditioning cannot be combined with "
+                             "scale_cond/film")
+        from src.ddpm.unet_cond import UNet1DScaleCond
+        return UNet1DScaleCond(cond_mode=cond_mode, cond_scale=cond_scale)
+    return UNet1D(cond_mode=cond_mode, cond_scale=cond_scale,
+                  scale_cond=scale_cond, film=film)

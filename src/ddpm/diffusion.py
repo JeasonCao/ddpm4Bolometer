@@ -33,13 +33,16 @@ class GaussianDiffusion(nn.Module):
 
     def __init__(self, model: nn.Module, schedule: DiffusionSchedule,
                  loss_type: str = 'l2', spectral_loss=None,
-                 cond_mode: str = 'step'):
+                 cond_mode: str = 'step', out_channels: int = 1):
         super().__init__()
         assert cond_mode in ('step', 'sqrt_ab'), f"unknown cond_mode: {cond_mode}"
         self.model = model
         self.schedule = schedule
         self.T = schedule.T
         self.cond_mode = cond_mode
+        # Channels of x_0 / x_t (1 = single denoised waveform; 2 = the joint
+        # pileup model's (x1, x2) heads, see src/pileup_joint/).
+        self.out_channels = out_channels
         self.loss_fn = nn.functional.l1_loss if loss_type == 'l1' else nn.functional.mse_loss
         self.spectral_loss = spectral_loss
 
@@ -67,15 +70,23 @@ class GaussianDiffusion(nn.Module):
 
         return sqrt_ab * x_0 + sqrt_1_ab * noise
 
-    def _predict_noise(self, x_t, x_tilde, cond, scale=None):
-        """Call model with or without scale conditioning.
+    def _predict_noise(self, x_t, x_tilde, cond, scale=None, channel_id=None):
+        """Call model with optional scale and/or channel conditioning.
 
         `cond` is either a 1-indexed step tensor (cond_mode='step') or
-        a continuous sqrt(alpha_bar) tensor (cond_mode='sqrt_ab').
+        a continuous sqrt(alpha_bar) tensor (cond_mode='sqrt_ab'). `channel_id`
+        (B,) selects the per-channel token in the multi-channel U-Net; it is
+        passed as a keyword so single-channel models that don't accept it are
+        unaffected when channel_id is None.
         """
+        kwargs = {}
+        if channel_id is not None:
+            kwargs['channel_id'] = channel_id
+        # By keyword: UNet1D takes (..., channel_id, scale), the legacy
+        # UNet1DScaleCond takes (..., scale); both name it `scale`.
         if scale is not None:
-            return self.model(x_t, x_tilde, cond, scale)
-        return self.model(x_t, x_tilde, cond)
+            kwargs['scale'] = scale
+        return self.model(x_t, x_tilde, cond, **kwargs)
 
     def _sample_sqrt_ab(self, t: torch.Tensor) -> torch.Tensor:
         """For cond_mode='sqrt_ab': sample continuous sqrt(alpha_bar) ~ Uniform(low, high).
@@ -96,7 +107,8 @@ class GaussianDiffusion(nn.Module):
 
     def training_loss(self, x_0: torch.Tensor,
                       x_tilde: torch.Tensor,
-                      scale: torch.Tensor = None) -> torch.Tensor:
+                      scale: torch.Tensor = None,
+                      channel_id: torch.Tensor = None) -> torch.Tensor:
         """Compute training loss (noise prediction + optional spectral).
 
         Parameters
@@ -104,6 +116,7 @@ class GaussianDiffusion(nn.Module):
         x_0 : (B, 1, L) — clean signal
         x_tilde : (B, 1, L) — noisy observation (conditioning)
         scale : (B,) — optional max(|noisy|) for scale-conditioned models
+        channel_id : (B,) — optional channel index for the channel token
 
         Returns
         -------
@@ -133,7 +146,7 @@ class GaussianDiffusion(nn.Module):
         sqrt_1_ab = sqrt_1_ab_vec.view(-1, 1, 1)
         x_t = sqrt_ab * x_0 + sqrt_1_ab * noise
 
-        eps_pred = self._predict_noise(x_t, x_tilde, cond, scale)
+        eps_pred = self._predict_noise(x_t, x_tilde, cond, scale, channel_id)
 
         noise_loss = self.loss_fn(eps_pred, noise)
 
@@ -155,7 +168,8 @@ class GaussianDiffusion(nn.Module):
     def sample(self, x_tilde: torch.Tensor,
                scale: torch.Tensor = None,
                return_trajectory: bool = False,
-               stochastic: bool = True) -> torch.Tensor:
+               stochastic: bool = True,
+               channel_id: torch.Tensor = None) -> torch.Tensor:
         """Reverse process: denoise x_tilde by running T steps.
 
         Parameters
@@ -176,7 +190,7 @@ class GaussianDiffusion(nn.Module):
         B, C, L = x_tilde.shape
 
         # Start from pure noise
-        x_t = torch.randn(B, 1, L, device=device)
+        x_t = torch.randn(B, self.out_channels, L, device=device)
 
         trajectory = [x_t] if return_trajectory else None
 
@@ -187,7 +201,7 @@ class GaussianDiffusion(nn.Module):
                 cond = torch.full((B,), i + 1, device=device, dtype=torch.long)
 
             # Predict noise
-            eps_pred = self._predict_noise(x_t, x_tilde, cond, scale)
+            eps_pred = self._predict_noise(x_t, x_tilde, cond, scale, channel_id)
 
             # DDPM reverse step
             alpha_t = self.schedule.alpha[i]
@@ -216,7 +230,8 @@ class GaussianDiffusion(nn.Module):
     def ddim_sample(self, x_tilde: torch.Tensor,
                     scale: torch.Tensor = None,
                     steps: int = None,
-                    eta: float = 0.0) -> torch.Tensor:
+                    eta: float = 0.0,
+                    channel_id: torch.Tensor = None) -> torch.Tensor:
         """DDIM sampling (Song et al. 2020). Deterministic when eta=0.
 
         Uses the same trained model — only the sampling rule changes.
@@ -243,7 +258,7 @@ class GaussianDiffusion(nn.Module):
         # e.g. steps=10, T=50 → [49, 44, 39, 34, 29, 24, 19, 14, 9, 4]
         tau = torch.linspace(self.T - 1, 0, steps, device=device).long()
 
-        x_t = torch.randn(B, 1, L, device=device)
+        x_t = torch.randn(B, self.out_channels, L, device=device)
 
         for i in range(len(tau)):
             t_cur = tau[i]
@@ -252,7 +267,7 @@ class GaussianDiffusion(nn.Module):
             else:
                 cond = torch.full((B,), t_cur + 1, device=device, dtype=torch.long)
 
-            eps_pred = self._predict_noise(x_t, x_tilde, cond, scale)
+            eps_pred = self._predict_noise(x_t, x_tilde, cond, scale, channel_id)
 
             alpha_bar_t = self.schedule.alpha_bar[t_cur]
             sqrt_ab_t = self.schedule.sqrt_alpha_bar[t_cur]
@@ -294,7 +309,8 @@ class GaussianDiffusion(nn.Module):
                           sampler: str = 'ddpm',
                           ddim_steps: int = None,
                           eta: float = 0.0,
-                          stochastic: bool = True) -> torch.Tensor:
+                          stochastic: bool = True,
+                          channel_id: torch.Tensor = None) -> torch.Tensor:
         """Multi-shot inference: run M independent reverse processes and aggregate.
 
         Parameters
@@ -314,8 +330,10 @@ class GaussianDiffusion(nn.Module):
         """
         def _single():
             if sampler == 'ddim':
-                return self.ddim_sample(x_tilde, scale=scale, steps=ddim_steps, eta=eta)
-            return self.sample(x_tilde, scale=scale, stochastic=stochastic)
+                return self.ddim_sample(x_tilde, scale=scale, steps=ddim_steps, eta=eta,
+                                        channel_id=channel_id)
+            return self.sample(x_tilde, scale=scale, stochastic=stochastic,
+                               channel_id=channel_id)
 
         samples = torch.stack([_single() for _ in range(M)])
         if aggregation == 'median':

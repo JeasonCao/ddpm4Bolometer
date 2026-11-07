@@ -208,7 +208,9 @@ def generate_paired_noise(rng: np.random.Generator,
                           f_sample: float = 1000.0,
                           f_bessel: float = 120.0,
                           bessel_order: int = 6,
-                          scale_range: tuple = (0.5, 2.0)
+                          scale_range: tuple = (0.5, 2.0),
+                          r: float = None,
+                          scale: float = None
                           ) -> tuple:
     """Generate paired (periodic, white, total) noise from one component draw.
 
@@ -219,6 +221,12 @@ def generate_paired_noise(rng: np.random.Generator,
     are uncorrelated). Then total = scale · (alpha·P + beta·W) with
     scale ~ U(scale_range), so RMS(total) ≈ scale · target_rms.
 
+    The mix ``r`` and ``scale`` are drawn per call (per window) by default.
+    Pass explicit ``r`` and/or ``scale`` to override — used by the channel-bank
+    generator to fix the periodic/white balance and overall amplitude per
+    channel (part of the channel's noise identity) while the random realization
+    still varies per window.
+
     Returns
     -------
     periodic : ndarray, shape (duration*f_sample,)
@@ -228,7 +236,7 @@ def generate_paired_noise(rng: np.random.Generator,
     total : ndarray, same shape
         Combined window scale · (alpha·periodic + beta·white).
     meta : dict
-        {'alpha', 'beta', 'r', 'scale', 'target_rms'} — per-window metadata.
+        {'alpha', 'beta', 'r', 'scale', 'target_rms'} — mix metadata.
     """
     comps = generate_components(rng, params, duration=duration)
 
@@ -237,10 +245,12 @@ def generate_paired_noise(rng: np.random.Generator,
     periodic = _assemble(comps, PERIODIC_KEYS, params, **asm_kwargs)
     white = _assemble(comps, WHITE_KEYS, params, **asm_kwargs)
 
-    r = float(rng.uniform(0.0, 1.0))
+    if r is None:
+        r = float(rng.uniform(0.0, 1.0))
     alpha = float(np.sqrt(r))
     beta = float(np.sqrt(1.0 - r))
-    scale = float(rng.uniform(*scale_range))
+    if scale is None:
+        scale = float(rng.uniform(*scale_range))
 
     total = scale * (alpha * periodic + beta * white)
 

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.out
+*.pdf
+*.root
+data/
+plots/
