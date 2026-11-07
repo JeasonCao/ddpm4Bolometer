@@ -2,6 +2,43 @@
 
 Denoising Diffusion Probabilistic Model (DDPM) for denoising cryogenic bolometer pulse signals from the CUORE experiment.
 
+## Quick Start (current model: scale embedding + FiLM)
+
+Four steps. `M` is the data root, `D` the model directory.
+
+```bash
+M=/media/Disk_YIN/yunshancheng/cuore
+D=$M/my_new_model
+
+# 1. Clean training + test data (tri-exp pulses). Noise: $M/noise_v2/noise_total
+python3 -u scripts/generate_clean_shards.py --output_dir $M/clean_triexp \
+    --model triexp --tau_energy_scaling
+python3 -u scripts/generate_clean_shards.py --output_dir $M/clean_triexp/test \
+    --model triexp --tau_energy_scaling --n_shards 1 --base_seed 99999
+
+# 2. Train
+mkdir -p $D
+nohup stdbuf -oL python3 -u -m src.ddpm.train \
+    --clean_dir $M/clean_triexp --noise_dir $M/noise_v2/noise_total \
+    --output_dir $D --loss l2 --scale_emb --film --amp \
+    --epochs 100 --batch_size 32 --lr 2e-4 --num_workers 4 \
+    > $D/train.log 2>&1 &
+
+# 3. Denoise the test set
+python3 -u scripts/denoise_test_set.py --scale_emb --film \
+    --clean_h5 $M/clean_triexp/test/clean_000.h5 \
+    --noise_h5 $M/noise_v2/noise_total/test/noise_000.h5 \
+    --model_path $D/best_model.pt --output $D/denoised_test_000.h5
+
+# 4. Plots + metrics -> $D/qa_test/
+python3 -u scripts/plot_triexp_inference.py --denoised_h5 $D/denoised_test_000.h5
+```
+
+`--scale_emb --film` must be passed at training **and** at every inference step.
+Already have data? Skip step 1.
+
+Everything below is background and reference.
+
 ## Task
 
 CUORE measures rare nuclear decays using TeO2 bolometers operating at ~10 mK. Each detector channel records voltage pulses proportional to deposited energy, contaminated by thermal and electronic noise. This DDPM denoiser recovers clean pulse waveforms from noisy observations to improve energy resolution.
@@ -66,6 +103,70 @@ cond = timestep_emb + scale_emb  (fed to every ResBlock)
 
 **Motivation**: Per-window normalization maps all inputs to [-1, 1], but a low-amplitude pileup (pulse peak ~30 mV, noise ~80 mV) looks very different from a high-amplitude pulse (peak ~5000 mV) in normalized space. Without scale information, the model cannot distinguish noise-dominated inputs from pulse-dominated ones. Since the noise level is roughly constant across windows, `max(|noisy|)` directly indicates pulse amplitude and thus SNR.
 
+**Status: legacy.** This class is kept only so old checkpoints (e.g.
+`ddpm_scale_cond/`) still load. New models should use `UNet1D` with
+`--scale_emb` and optionally `--film` (next section).
+
+### Scale embedding + AdaGN/FiLM (`--scale_emb`, `--film`)
+
+These are two independent switches on `UNet1D`, so the 2×2 ablation (none /
+scale only / FiLM only / both) uses the same code path. Both also work with
+the channel token (`n_channels`).
+
+**`--scale_emb`** (`ScaleEmbedding` in `unet.py`) conditions on the same
+`scale = max(|noisy|)`. This is an observable, available at inference, so
+there is no truth leak.
+
+```
+x = (log10(scale) - c) / w        # log10_range (-2, 1) -> [-1, 1]  (10 mV .. 10 V)
+feats = [x, sin(pi 2^k x), cos(pi 2^k x)],  k = 0..5
+scale_emb = MLP(feats)            # 13 -> 1024 -> 256
+cond = time_emb (+ channel_emb) + scale_emb
+```
+
+- The measured log10(scale) spans [-1.73, -0.37] on `clean_v3/clean_low`,
+  [-1.23, 1.05] on `clean_v3/clean_high` and [-1.58, 1.02] on
+  `clean_triexp`. The default range covers all three, and values outside it
+  are not clamped.
+- The legacy encoding fed `10·ln(scale)` into the integer-timestep sinusoidal
+  table, an arbitrary ×10 on frequencies designed for steps 1..T. The new
+  Fourier frequencies are matched to the normalized range: the finest repeats
+  every ~0.09 decades, and the coarser ones keep the code unique.
+- Adds about 0.28M parameters.
+
+**`--film`** switches every ResBlock from an additive bias to AdaGN, the
+improved-DDPM / ADM block:
+
+```
+additive (default):  h = SiLU(GN1(conv1 x)) + Linear(cond);  h = SiLU(GN2(conv2 h))
+FiLM / AdaGN:        h = SiLU(GN1(conv1 x));  (gamma, beta) = Linear(SiLU(cond))
+                     h = SiLU(GN2(conv2 h) * (1 + gamma) + beta)
+```
+
+- **Why:** with an additive bias, `Linear(t_emb + s_emb)` is a sum of
+  separate terms, so t and scale can only shift channel activations. FiLM
+  lets the conditioning *scale* features. That is what SNR-dependent
+  denoising needs: suppress input detail when the window is noise-dominated,
+  trust it when it is pulse-dominated.
+- **Initialization:** the projection is zero-initialized, so at init every
+  block is a plain GroupNorm and the output does not depend on the
+  conditioning (verified). Conditioning is then learned as a delta.
+- **Cost:** adds about 1.1M parameters (16.5M total with `--scale_emb`). The
+  FiLM projection uses the attribute name `film_proj`, not `t_proj`, so
+  additive and FiLM checkpoints fail loudly rather than load into each other.
+
+**Why both, and why separate switches.** The goal is the combination
+(scale-aware *and* multiplicative). An improvement from the combined model
+cannot be attributed to either part without the single-switch controls, so
+the switches are kept orthogonal.
+
+**Flag rules:**
+- `--scale_cond` (legacy) cannot be combined with `--scale_emb` or `--film`.
+- All three must match at inference, because `inference.py` does not read
+  `config.json`.
+- Model construction for both scripts goes through `build_ddpm_model()` in
+  `unet.py`.
+
 ## Loss Functions
 
 The training loss consists of a base noise-prediction loss plus optional spectral losses computed on the Tweedie estimate x̂_0:
@@ -127,11 +228,16 @@ src/ddpm/
   log-scale conditioning branch. The per-window normalization scale
   `max(|noisy|)` is encoded as `log(scale)*10 → SinusoidalEmbedding → MLP`
   and added into the timestep embedding so the network knows the input SNR.
+  Legacy: superseded by `UNet1D(scale_cond=True, film=...)`, kept for old
+  checkpoints.
 
 - **`diffusion.py`** — `GaussianDiffusion(model, schedule, loss_type,
-  spectral_loss, cond_mode)`: forward `q(x_t|x_0)`, training loss (noise MSE
-  / L1 with optional spectral terms on the Tweedie x̂_0), DDPM ancestral
-  sampler, and DDIM sampler with `eta` and configurable step skipping.
+  spectral_loss, cond_mode, out_channels=1)`: forward `q(x_t|x_0)`, training
+  loss (noise MSE / L1 with optional spectral terms on the Tweedie x̂_0), DDPM
+  ancestral sampler, and DDIM sampler with `eta` and configurable step
+  skipping. `out_channels` is the channel count of x_0 that both samplers
+  start from (default 1). The joint pileup model in `src/pileup_joint/` uses
+  2, one channel per pulse; the conditioning y stays 1 channel.
 
 - **`dataset.py`** — `PulseNoiseDataset(clean_dir, noise_dir, subset=None)`:
   thread-safe lazy HDF5 reader. Pairs clean window `i` with noise window
@@ -220,6 +326,19 @@ nohup stdbuf -oL python3 -u -m src.ddpm.train \
     --noise_dir /path/to/noise \
     --output_dir /path/to/output \
     --loss l1 --scale_cond \
+    --epochs 100 --batch_size 32 --lr 2e-4 --num_workers 4 \
+    > /path/to/output/train.log 2>&1 & echo "PID: $!"
+```
+
+The command above is the legacy `UNet1DScaleCond`. For new models, use scale
+embedding + AdaGN/FiLM (drop either flag for the ablation controls):
+
+```bash
+nohup stdbuf -oL python3 -u -m src.ddpm.train \
+    --clean_dir /path/to/clean \
+    --noise_dir /path/to/noise \
+    --output_dir /path/to/output \
+    --loss l1 --scale_emb --film --amp \
     --epochs 100 --batch_size 32 --lr 2e-4 --num_workers 4 \
     > /path/to/output/train.log 2>&1 & echo "PID: $!"
 ```
@@ -372,6 +491,45 @@ The inference QA plot has 4 columns per sample:
 3. **PSD**: Power spectral density comparing clean, noisy, and 10-shot denoised
 4. **Metrics**: Per-sample metrics table with all numeric results
 
+## Results: `ddpm_triexp_scale_film`
+
+Commands: see Quick Start at the top. Resume to more epochs with `--resume $D/checkpoint_100.pt --epochs 200 --lr 1e-4`.
+
+Test set: 10000 windows, 30.6 % pileup.
+
+Deterministic 1-shot DDPM with the epoch-95 best model:
+
+| | noisy | denoised |
+|---|---|---|
+| median RMS error | 9.38 mV | 0.476 mV |
+| single-pulse SNR (median) | 10.1 dB | 38.2 dB |
+| pileup SNR (median) | 20.2 dB | 45.0 dB |
+| median abs. amplitude error (fit) | 0.95 % | 0.48 % |
+
+Observations that drive the next steps:
+
+- **Baseline wiggle.** About 10 % of windows, mostly below 100 keV, get a
+  model-generated 2–6 Hz baseline wiggle of about 0.3 mV before the pulse.
+  It is not correlated with the input noise.
+- **Longer training.** Resuming to 200 epochs lowers the validation loss
+  by about 10 % (best at epoch 190). Under deterministic DDPM, though, the
+  epoch-190 model is worse on the test set: single-pulse MAE goes from
+  277 to 385 µV, and the 4–9 s tail is biased low. Its baseline is
+  cleaner: baseline RMS 25.8 → 10.7 µV, and the share of windows with a
+  wiggle drops from 10.5 % to 7.7 %.
+- **Sampler vs. network** (`compare_samplers.py`, 1000 windows):
+  - DDIM at 10, 25 and 50 steps gives nearly the same metrics, so step
+    count is not the bottleneck and a larger T is unlikely to help.
+  - The low-biased tail comes mainly from deterministic DDPM, which only
+    drops the noise term and is not a consistent ODE sampler. DDIM
+    shrinks it by 4–5×.
+  - DDIM is much better above 1.5 MeV (MAE roughly halved, SNR +5 dB).
+    It is worse at low energy for the epoch-95 model and produces more
+    baseline wiggle.
+  - The remaining error is network-limited. A deeper U-Net with more
+    downsampling levels, for a larger receptive field, is the next
+    candidate.
+
 ## CLI Reference
 
 ### `train.py` arguments
@@ -401,7 +559,9 @@ The inference QA plot has 4 columns per sample:
 | `--resume` | None | Path to a `checkpoint_*.pt` (or `best_model.pt`) to resume from. Restores model, optimizer, epoch, and `best_val_loss`. Cosine LR is rebuilt for the remaining epochs starting at `--lr` (no warm-up). |
 | `--amp` | False | Enable mixed-precision (float16) training via `torch.cuda.amp`. |
 | `--compile` | False | Wrap the U-Net in `torch.compile` for kernel fusion (slower first epoch). |
-| `--scale_cond` | False | Use `UNet1DScaleCond` instead of `UNet1D` (adds log-scale conditioning). Must match at inference. |
+| `--scale_cond` | False | Legacy: use `UNet1DScaleCond` instead of `UNet1D`. Only for old checkpoints. Must match at inference. |
+| `--scale_emb` | False | `UNet1D` conditioned on `max(|noisy|)` via the log10 Fourier-feature `ScaleEmbedding`. Must match at inference. |
+| `--film` | False | AdaGN/FiLM conditioning in every ResBlock instead of an additive bias. Must match at inference. |
 | `--subset` | None | Filter the training set to a category from the precomputed `_index.json`: `pileup`, `single`, `low_100`, `low_200`, `pileup_low_100`, `pileup_low_200`, or custom. Requires `preprocess_index.py` first. |
 
 ### `inference.py` arguments
@@ -425,7 +585,9 @@ The inference QA plot has 4 columns per sample:
 | `--seed` | 123 | Selection seed for samples (when `--indices` is not given) and the reverse-process noise seed. |
 | `--indices` | None | Comma-separated explicit sample indices (e.g. `23,31,33`). Overrides `--n` and `--seed`-driven random selection. |
 | `--filter` | None | Restrict samples to a category. Built-in: `pileup`, `single`, `low_pileup` (= `pileup_low_100`). With `*_index.json`: `low_100`, `low_200`, `pileup_low_200`, plus any custom category. |
-| `--scale_cond` | False | Use `UNet1DScaleCond`. **Must match training.** |
+| `--scale_cond` | False | Legacy `UNet1DScaleCond`. **Must match training.** |
+| `--scale_emb` | False | Scale-embedding `UNet1D`. **Must match training.** |
+| `--film` | False | AdaGN/FiLM ResBlocks. **Must match training.** |
 | `--aggregation` | `mean` | Multi-shot reducer: `mean` or `median` (median is more robust to outlier samples). |
 | `--sampler` | `ddpm` | `ddpm` = stochastic ancestral sampler (multi-shot averaging is the recommended mode). `ddim` = deterministic. |
 | `--ddim_steps` | None | Number of DDIM steps (skip-by-K). `None` = use full `T`. |
@@ -477,9 +639,37 @@ scripts at the resulting HDF5.
     `/mix/`), `--model_path` (required), `--output` (required H5 path).
   - `--T` (50), `--beta_1` (1e-4), `--beta_T` (0.5), `--cond_mode`
     (`step`): must match the training schedule of `--model_path`.
+  - `--scale_cond` / `--scale_emb` / `--film`: architecture flags, must
+    match training.
   - `--batch_size` (64): inference batch size.
+  - `--seed` (0): seeds `x_T` (deterministic DDPM still starts from random
+    noise), so reruns are bit-identical.
   - `--n_limit` (None): stop after this many windows; default processes
     everything in the file.
+
+- **`plot_triexp_inference.py`** — QA for a denoised tri-exp test set
+  (full 1 keV–5.4 MeV range). Writes to `--out_dir` (default
+  `<dir of denoised_h5>/qa_test`):
+  - `examples_single.png`: nearest single-pulse window to each of
+    50/100/300/600/1000/2615/5000 keV; columns time / residual / PSD.
+  - `examples_pileup.png`: pileups at Δt ≈ 0.05/0.3/1.0/1.8 s.
+  - `shape_vs_energy.png`: clean waveforms of the single examples scaled
+    to max|clean| = 1, to compare pulse shape vs energy.
+  - `metrics_vs_energy.png` (binned median + 16–84 % band) and
+    `metrics_vs_snr.png` (scatter), single vs pileup.
+  - `metrics_summary.txt`, `metrics.pkl` (cached per-window metrics,
+    including `fit_pulse` amplitude / peak-time errors and pre-pulse
+    baseline RMS).
+  - `--workers` (20): processes for the per-window fits; `--n_ebins` (12).
+  - Exports `TYPICAL_E_KEV`, `PILEUP_DT_S`, `pick_single`, `pick_pileup`,
+    `compute_psd` so the scripts below reuse the same example windows.
+
+- **`denoise_examples_multishot.py`** — re-denoises the example windows
+  M times (`--M` 10) and compares the shot mean with the saved 1-shot.
+  Default is deterministic DDPM (shots differ only in `x_T`);
+  `--stochastic` uses stochastic DDPM shots. Needs the architecture flags.
+  Writes `multishot[_stoch]_examples.h5 / _single.png / _pileup.png /
+  _metrics.txt`.
 
 - **`plot_denoising_paper.py`** — 4-row paper figure (single low/high
   amplitude, pileup low/high amplitude) read directly from the denoised
@@ -522,6 +712,19 @@ scripts at the resulting HDF5.
     may be requested per run.
 
 ### Model comparison + debugging
+
+- **`compare_denoised_examples.py`** — overlays two denoised test HDF5s
+  (same clean/noise pair, e.g. two checkpoints) on the QA example windows
+  of `plot_triexp_inference.py`. `--h5_a/--h5_b`, `--label_a/--label_b`,
+  `--out_prefix` (writes `<prefix>_single.png`, `<prefix>_pileup.png`).
+
+- **`compare_samplers.py`** — re-denoises every `--stride`-th (10) window
+  of a denoised test HDF5 with deterministic DDPM and DDIM (eta=0) at
+  50/25/10 steps, for one or more checkpoints (`--models name=path ...`).
+  Answers "is the residual from the sampler's discretization or from the
+  network?". Writes `qa_samplers/samplers.h5` (all denoised windows) and
+  `samplers_summary.txt` (MAE, PRD, SNR, baseline RMS, 4–9 s tail bias,
+  fraction of windows with baseline wiggle, per energy group).
 
 - **`compare_models_pileup_qa.py`** — side-by-side QA of two DDPM
   checkpoints on the same deterministic 1-shot pileup samples. Reads
@@ -581,6 +784,96 @@ scripts at the resulting HDF5.
   domain + PSD with clean / noisy / pure-noise overlaid.
   - `--seed` (0): index selection RNG.
   - `--out`: output figure path.
+
+## Multi-channel foundation model
+
+Real detectors have ~1000 channels, each with its own pulse-shape and noise
+identity. Rather than train one U-Net per channel, we train **one shared
+backbone** and adapt to each channel with a tiny **channel token** (Tier-1
+adapter: one learned `emb_dim` embedding row per channel, added to the timestep
+embedding in `UNet1D`, enabled via `n_channels`). The diffusion framework is
+unchanged — the token is just extra conditioning, threaded through
+`diffusion.py` as `channel_id`.
+
+### Data
+
+Channels are a data-layout concept: one shard per channel (`channel_id == shard
+index`). Detector params (pulse identity) and noise PSD params + mix `r`/`scale`
+(noise identity) are **fixed per channel**; event energy/pileup and the noise
+realization vary per window. See `src/pulse/README.md` and `src/noise/README.md`
+(channel-bank sections) for the generators. `ChannelBankDataset` pairs clean and
+noise **within the same channel** and returns `channel_id`.
+
+### Two splits (don't conflate them)
+
+- **Channel split**: train channels (pretrain) vs held-out channels (fine-tune +
+  eval). Held-out channels are never seen during pretraining.
+- **Window split** (held-out channels only): fine-tune windows `[0, K_pool)` vs
+  disjoint test windows `[test_start, …)`. Train channels use all their windows.
+
+### Workflow
+
+The whole sweep (pretrain → token fine-tune sweep → oracle → eval) is wrapped in
+`scripts/run_foundation.sh` — edit the variables at the top and run it (under
+`nohup` for a long job). Equivalent step-by-step commands:
+
+```bash
+# Pretrain — backbone + train-channel tokens (channels 0-79)
+python -u -m src.ddpm.train_channel --phase pretrain \
+    --clean_dir .../channel_bank/clean \
+    --noise_dir .../channel_bank/noise/noise_total \
+    --output_dir .../runs/foundation \
+    --n_channels 100 --train_channels 0-79 --epochs 100 --batch_size 16
+
+# Fine-tune — freeze backbone, fine-tune held-out tokens (the method), per K
+for K in 10 50 100 200 400 800; do
+  python -u -m src.ddpm.train_channel --phase finetune \
+    --clean_dir .../channel_bank/clean --noise_dir .../channel_bank/noise/noise_total \
+    --output_dir .../runs/foundation --resume .../runs/foundation/backbone.pt \
+    --finetune_channels 80-99 --n_finetune_windows $K --epochs 200 --lr 1e-3
+done
+
+# Oracle ceiling — full backbone fine-tune on the largest pool.
+# Use a low LR + cosine annealing: a full fine-tune at constant high LR drifts
+# the backbone away from the calibrated eps-prediction the sampler needs, which
+# degrades reverse-diffusion sampling even while the train loss keeps dropping.
+python -u -m src.ddpm.train_channel --phase finetune --finetune_mode full \
+    --lr_schedule cosine \
+    --clean_dir .../channel_bank/clean --noise_dir .../channel_bank/noise/noise_total \
+    --output_dir .../runs/foundation --resume .../runs/foundation/backbone.pt \
+    --finetune_channels 80-99 --n_finetune_windows 800 --epochs 60 --lr 2e-5
+
+# Eval — ladder (zero-shot / fine-tuned / oracle) + data-efficiency curve
+python -u -m src.ddpm.eval_channel \
+    --clean_dir .../channel_bank/clean --noise_dir .../channel_bank/noise/noise_total \
+    --backbone .../runs/foundation/backbone.pt \
+    --finetuned .../runs/foundation/finetuned_nft*.pt \
+    --oracle .../runs/foundation/oracle_nft800.pt \
+    --channels 80-99 --test_start 800 --max_test_windows 200 \
+    --output_dir .../runs/foundation/eval
+```
+
+The **ladder** (all on the same held-out test windows): *zero-shot* (backbone
+with the **mean trained token** for held-out channels — see below), *fine-tuned
+token* (256 params), *oracle* (full backbone fine-tune, ~15M params — the
+ceiling). Inference is the standard
+reverse-diffusion denoise plus `channel_id` (single-shot deterministic DDPM in
+eval: `diffusion.sample(x_tilde, channel_id=c, stochastic=False)`). If the
+cheap token approaches the oracle, one backbone + a per-channel token replaces
+1000 U-Nets.
+
+**Zero-shot token choice.** Held-out channel rows in the embedding table are
+zero-initialized and never updated in pretrain, so feeding the raw zero row is
+out-of-distribution conditioning (the backbone only ever saw the learned,
+nonzero train tokens). `eval_channel.fill_untrained_with_mean` instead sets each
+untrained row to the **mean of the trained tokens** — an "average channel" prior
+the backbone has actually seen — which is the honest zero-shot baseline.
+
+**Oracle LR schedule.** `--lr_schedule cosine` anneals the LR to `1e-7` and
+applies to the **oracle (full) fine-tune only**; the token fine-tune always uses
+constant LR (it converges fine, and a 256-param fit doesn't need annealing). A
+constant high LR on a full fine-tune was observed to collapse the oracle below
+even the zero-shot baseline despite a healthy train loss.
 
 ## References
 

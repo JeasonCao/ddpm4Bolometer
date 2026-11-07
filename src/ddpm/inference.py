@@ -25,7 +25,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from src.ddpm.schedule import DiffusionSchedule
-from src.ddpm.unet import UNet1D
+from src.ddpm.unet import build_ddpm_model
 from src.ddpm.diffusion import GaussianDiffusion
 from src.ddpm.dataset import PulseNoiseDataset
 
@@ -434,7 +434,14 @@ def main():
                              'low_pileup (=pileup_low_100). With index file: also '
                              'low_100, low_200, pileup_low_200, or any custom category.')
     parser.add_argument('--scale_cond', action='store_true',
-                        help='Use scale-conditioned U-Net (UNet1DScaleCond)')
+                        help='Legacy scale-conditioned U-Net (UNet1DScaleCond); '
+                             'only for old checkpoints such as ddpm_scale_cond/')
+    parser.add_argument('--scale_emb', action='store_true',
+                        help='UNet1D conditioned on the normalization scale '
+                             'max(|noisy|) (log10 Fourier-feature embedding)')
+    parser.add_argument('--film', action='store_true',
+                        help='AdaGN/FiLM conditioning in every ResBlock instead '
+                             'of an additive bias')
     parser.add_argument('--aggregation', choices=['mean', 'median'], default='mean',
                         help='Multi-shot aggregation: mean (default) or median')
     parser.add_argument('--sampler', choices=['ddpm', 'ddim'], default='ddpm',
@@ -454,15 +461,12 @@ def main():
     schedule = DiffusionSchedule(T=args.T, beta_1=args.beta_1, beta_T=args.beta_T).to(device)
     print(f"Schedule: T={args.T}, beta_1={args.beta_1}, beta_T={args.beta_T}, "
           f"alpha_bar_T={schedule.alpha_bar[-1].item():.4g}")
-    if args.scale_cond:
-        from src.ddpm.unet_cond import UNet1DScaleCond
-        model = UNet1DScaleCond(cond_mode=args.cond_mode,
-                                cond_scale=args.cond_scale).to(device)
-        print(f"Using scale-conditioned U-Net, cond_mode={args.cond_mode}")
-    else:
-        model = UNet1D(cond_mode=args.cond_mode,
-                       cond_scale=args.cond_scale).to(device)
-        print(f"Using UNet1D, cond_mode={args.cond_mode}")
+    model = build_ddpm_model(cond_mode=args.cond_mode, cond_scale=args.cond_scale,
+                             scale_cond=args.scale_emb, film=args.film,
+                             legacy_scale_cond=args.scale_cond).to(device)
+    print(f"Using {type(model).__name__}, cond_mode={args.cond_mode}, "
+          f"legacy_scale_cond={args.scale_cond}, scale_emb={args.scale_emb}, "
+          f"film={args.film}")
     model.load_state_dict(torch.load(args.model_path, map_location=device,
                                      weights_only=True))
     model.eval()
@@ -530,7 +534,7 @@ def main():
 
         # Denoise in normalized space
         x_noisy_dev = x_noisy.unsqueeze(0).to(device)
-        scale_dev = torch.tensor([scale], device=device) if args.scale_cond else None
+        scale_dev = torch.tensor([scale], device=device) if (args.scale_cond or args.scale_emb) else None
         tag = "pileup" if pileup else "single"
         sampler_label = args.sampler.upper()
         if args.sampler == 'ddim':

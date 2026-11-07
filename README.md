@@ -2,6 +2,41 @@
 
 Generative-model-based denoising of cryogenic bolometer pulse signals from the [CUORE experiment](https://cuore.lngs.infn.it/). CUORE searches for neutrinoless double-beta decay using 988 TeO2 bolometers at ~10 mK. Each channel records voltage pulses proportional to deposited energy, contaminated by thermal and electronic noise. This project trains conditional generative models to recover clean pulse waveforms from noisy observations to improve energy resolution.
 
+## Quick Start (current model: scale embedding + FiLM)
+
+Four steps. `M` is the data root, `D` the model directory.
+
+```bash
+M=/media/Disk_YIN/yunshancheng/cuore
+D=$M/my_new_model
+
+# 1. Clean training + test data (tri-exp pulses). Noise: $M/noise_v2/noise_total
+python3 -u scripts/generate_clean_shards.py --output_dir $M/clean_triexp \
+    --model triexp --tau_energy_scaling
+python3 -u scripts/generate_clean_shards.py --output_dir $M/clean_triexp/test \
+    --model triexp --tau_energy_scaling --n_shards 1 --base_seed 99999
+
+# 2. Train
+mkdir -p $D
+nohup stdbuf -oL python3 -u -m src.ddpm.train \
+    --clean_dir $M/clean_triexp --noise_dir $M/noise_v2/noise_total \
+    --output_dir $D --loss l2 --scale_emb --film --amp \
+    --epochs 100 --batch_size 32 --lr 2e-4 --num_workers 4 \
+    > $D/train.log 2>&1 &
+
+# 3. Denoise the test set
+python3 -u scripts/denoise_test_set.py --scale_emb --film \
+    --clean_h5 $M/clean_triexp/test/clean_000.h5 \
+    --noise_h5 $M/noise_v2/noise_total/test/noise_000.h5 \
+    --model_path $D/best_model.pt --output $D/denoised_test_000.h5
+
+# 4. Plots + metrics -> $D/qa_test/
+python3 -u scripts/plot_triexp_inference.py --denoised_h5 $D/denoised_test_000.h5
+```
+
+`--scale_emb --film` must be passed at training **and** at every inference step.
+Already have data? Skip step 1.
+
 ## Data Pipeline
 
 ### Pulse Simulation (`src/pulse/`)
@@ -90,28 +125,7 @@ scripts/
                                (supports vs-SNR or vs-clean-amplitude x-axes)
 ```
 
-## Quick Start
-
-### Generate training data
-
-```bash
-# Clean pulses (10 shards x 10000 pulses)
-python3 -u scripts/generate_clean_shards.py \
-    --output_dir /path/to/clean --n_shards 10
-
-# Or use real noise from LUCE (extracted separately)
-```
-
-### Train DDPM
-
-```bash
-nohup stdbuf -oL python3 -u -m src.ddpm.train \
-    --clean_dir /path/to/clean \
-    --noise_dir /path/to/noise \
-    --output_dir /path/to/output \
-    --loss l1 --epochs 100 --batch_size 32 --lr 2e-4 --num_workers 4 \
-    > /path/to/output/train.log 2>&1 & echo "PID: $!"
-```
+## Other models and tools
 
 ### Train Flow Matching
 
