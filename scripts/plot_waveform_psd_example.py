@@ -38,16 +38,18 @@ import matplotlib.pyplot as plt
 F_SAMPLE = 1000.0
 
 
-def load_event(eval_file: str, event_idx: int):
+def load_event(eval_file: str, event_idx: int,
+               denoised_field: str = 'waveforms_denoised'):
     with h5py.File(eval_file, 'r') as f:
         energy_kev = float(f.attrs['energy_kev'])
         clean = f['clean_template'][:]
         noisy = f['waveforms_noisy'][event_idx]
-        if 'waveforms_denoised' not in f:
+        if denoised_field not in f:
+            avail = [k for k in f.keys() if k.startswith('waveforms_denoised')]
             raise KeyError(
-                f"{eval_file} has no 'waveforms_denoised' field — "
+                f"{eval_file} has no '{denoised_field}' field (available: {avail}) — "
                 f"run run_batch_inference.py on it first.")
-        denoised = f['waveforms_denoised'][event_idx]
+        denoised = f[denoised_field][event_idx]
         snr_db = float(f['snr_db'][event_idx])
     return energy_kev, clean, noisy, denoised, snr_db
 
@@ -94,12 +96,17 @@ def main():
     ap.add_argument('--event_idx', type=int, default=0,
                     help='Event index within each file (SNR is ~constant '
                          'across events at fixed noise RMS, so any index works)')
+    ap.add_argument('--denoised_field', default='waveforms_denoised',
+                    help='Which denoised field to read, e.g. '
+                         'waveforms_denoised_zeroinit for the zero-init method')
     ap.add_argument('--output', default=os.path.join(
         _RESULTS_DIR, 'plots', 'reconstruction_quality', 'waveform_psd_example.png'))
     args = ap.parse_args()
 
-    e_lo, clean_lo, noisy_lo, denoised_lo, snr_lo = load_event(args.eval_file_low, args.event_idx)
-    e_hi, clean_hi, noisy_hi, denoised_hi, snr_hi = load_event(args.eval_file_high, args.event_idx)
+    e_lo, clean_lo, noisy_lo, denoised_lo, snr_lo = load_event(
+        args.eval_file_low, args.event_idx, args.denoised_field)
+    e_hi, clean_hi, noisy_hi, denoised_hi, snr_hi = load_event(
+        args.eval_file_high, args.event_idx, args.denoised_field)
 
     fig, axes = plt.subplots(2, 2, figsize=(11, 7.5))
     plot_row(axes[0, 0], axes[0, 1], e_lo, clean_lo, noisy_lo, denoised_lo, snr_lo)

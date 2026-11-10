@@ -47,8 +47,17 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-_NOISE_LABELS = {'1p2mV': '1.2 mV', '7p5mV': '7.5 mV'}
-_NOISE_RMS_V  = {'1p2mV': 0.0012, '7p5mV': 0.0075}
+# 2026-09-22: 1.382 mV added (it replaces 1.2 mV in the paper). The
+# `*_zeroinit` spellings are here because the zero-init production fit dirs are
+# named results/fit_results/{1p382mV_zeroinit,7p5mV_zeroinit} and noise_tag is
+# derived from the directory basename — keeping the suffix in the tag also
+# stops the new figures from overwriting the older ones.
+_NOISE_LABELS = {'1p2mV': '1.2 mV', '1p382mV': '1.382 mV', '7p5mV': '7.5 mV',
+                 '1p382mV_zeroinit': '1.382 mV', '7p5mV_zeroinit': '7.5 mV',
+                 '1p382mV_zeroinit_bessel': '1.382 mV', '7p5mV_zeroinit_bessel': '7.5 mV'}
+_NOISE_RMS_V  = {'1p2mV': 0.0012, '1p382mV': 0.001382, '7p5mV': 0.0075,
+                 '1p382mV_zeroinit': 0.001382, '7p5mV_zeroinit': 0.0075,
+                 '1p382mV_zeroinit_bessel': 0.001382, '7p5mV_zeroinit_bessel': 0.0075}
 
 _METHOD_SUFFIX = {
     'triexp':  ('triexp_noisy',  'triexp_denoised'),
@@ -95,16 +104,23 @@ def _fit_global_calibration(fit_dir, method):
     return k, b, residuals
 
 
-def _baseline_res_str(noise_tag, k):
-    """Baseline resolution FWHM in keV = 2.355 * noise_rms_V * k, purely a
-    numeric conversion from the noise level using this figure's own
-    calibration slope. No literature framing is added here — that
-    belongs in the paper text, not the figure legend."""
+def _baseline_res_str(noise_tag, k=None):
+    """Baseline resolution FWHM in keV for this noise level.
+
+    2026-09-22: computed at the CANONICAL calibration slope (the one that
+    defined the noise levels), not at this figure's own refit slope — see
+    plot_utils.CANONICAL_CALIB_K_KEV_PER_V. The label is a fixed property of
+    the noise level, so it must read the same on every figure; a per-figure
+    refit made it drift (2.54 vs 2.55 keV for the same 1.382 mV).
+
+    `k` is accepted and ignored, so existing call sites need no change.
+    No literature framing is added here — that belongs in the paper text.
+    """
+    from src.basics.plot_utils import baseline_resolution_kev
     rms_v = _NOISE_RMS_V.get(noise_tag)
     if rms_v is None:
         return _NOISE_LABELS.get(noise_tag, noise_tag)
-    fwhm_kev = 2.355 * rms_v * k
-    return f'baseline resolution = {fwhm_kev:.2f} keV'
+    return f'baseline resolution = {baseline_resolution_kev(rms_v):.2f} keV'
 
 
 # ── load Gaussian fit stats from one HDF5 ────────────────────────────────────

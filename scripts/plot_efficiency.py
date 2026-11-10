@@ -83,33 +83,55 @@ def bar_pair(ax, val_n, val_d, title, ylabel='Rate (%)'):
 
 # ── calibration ───────────────────────────────────────────────────────────────
 
-def compute_calibrations(fit_dir):
-    """Compute energy calibrations, shared with plot_reconstruction_quality.py
-    (2026-09-10 unification — this used to run its own independent
-    fit_energy_calibration() over all files <=max_energy, unweighted, free
-    intercept, noisy and denoised each fit separately; that disagreed by
-    ~1% with plot_reconstruction_quality.py's calibration for the same
-    noise level, e.g. 2.20 vs 2.22 keV baseline resolution at 1.2mV).
+def compute_calibrations(fit_dir, max_energy=None):
+    """Energy calibration for the efficiency figures.
 
-    Now uses the same 5-point (239/511/727/1461/2615 keV) zero-intercept,
-    inverse-variance-weighted regression from src/basics/plot_utils.py,
-    fit once on DENOISED data and shared between noisy and denoised curves
-    — mirrors how a real experiment calibrates once, on its best/final
-    processing, and applies that single calibration to everything,
-    including the before/after comparison. b is always 0.
+    Zero-intercept, inverse-variance-weighted regression from
+    src/basics/plot_utils.py, fit once on DENOISED data and shared between the
+    noisy and denoised curves — a real experiment calibrates once, on its
+    best/final processing, and applies that single calibration to everything,
+    so the before/after difference reflects denoising rather than two
+    calibrations each absorbing their own bias. b is always 0.
 
-    Returns the same 4-key dict shape as before ('triexp_n'/'triexp_d'/
-    'maxbase_n'/'maxbase_d' -> (k, b)) so downstream code needs no changes.
+    2026-09-22: `max_energy` restricts the CALIBRATION POINT SET, not just
+    which files get plotted. These figures live below 511 keV, and the
+    detector response is mildly non-linear, so calibrating them on the
+    high-energy gamma points leaves a +1 to +2% common-mode bias that eats
+    into the |dE/E| < 5% acceptance window and understates the efficiency.
+    Calibrating on the points inside the plotted range is the project's
+    long-standing convention; a 2026-09-10 change had collapsed this onto the
+    high-energy set and silently broke it (the --max_energy help text still
+    described the old, correct behaviour).
+
+    The full-range figures (plot_reconstruction_quality.py) keep the 5
+    gamma-line-like high-energy points — they span the whole range, so that
+    is the right set for them.
+
+    Returns ('triexp_n'/'triexp_d'/'maxbase_n'/'maxbase_d' -> (k, b)) plus
+    'label_*' entries carrying the high-energy k. The baseline-resolution
+    label on these figures is drawn with the label k so that every figure in
+    the paper quotes the same baseline resolution regardless of which point
+    set its data was calibrated on.
     """
-    from src.basics.plot_utils import fit_global_calibration_zero_intercept
-    k_triexp,  _res_t = fit_global_calibration_zero_intercept(fit_dir, method='triexp')
-    k_maxbase, _res_m = fit_global_calibration_zero_intercept(fit_dir, method='maxbase')
-    return {
-        'triexp_n':  (k_triexp,  0.0),
-        'triexp_d':  (k_triexp,  0.0),
-        'maxbase_n': (k_maxbase, 0.0),
-        'maxbase_d': (k_maxbase, 0.0),
-    }
+    from src.basics.plot_utils import (fit_global_calibration_zero_intercept,
+                                       calib_energies_below)
+    ce = None if max_energy is None else calib_energies_below(fit_dir, max_energy)
+    if ce is not None and len(ce) < 2:
+        raise ValueError(f'only {len(ce)} calibration points <= {max_energy} keV '
+                         f'in {fit_dir}')
+    out = {}
+    for method, short in (('triexp', 'triexp'), ('maxbase', 'maxbase')):
+        k, _res = fit_global_calibration_zero_intercept(
+            fit_dir, method=method, calib_energies=ce)
+        k_label, _ = fit_global_calibration_zero_intercept(fit_dir, method=method)
+        out[f'{short}_n'] = (k, 0.0)
+        out[f'{short}_d'] = (k, 0.0)
+        out[f'label_{short}'] = (k_label, 0.0)
+        if ce is not None:
+            print(f'  {short:8s}: k={k:.2f} keV/V from {len(ce)} points '
+                  f'<= {max_energy:g} keV  (label k={k_label:.2f} from the '
+                  f'high-energy set)')
+    return out
 
 
 # ── per-file plotting ─────────────────────────────────────────────────────────
@@ -278,6 +300,11 @@ def plot_efficiency(fit_file: str, output: str, calibs: dict,
         'calib_triexp_d':        {'k': round(k_td, 3), 'b': round(b_td, 3)},
         'calib_maxbase_n':       {'k': round(k_mn, 3), 'b': round(b_mn, 3)},
         'calib_maxbase_d':       {'k': round(k_md, 3), 'b': round(b_md, 3)},
+        # High-energy-set k, carried through only so the downstream figures can
+        # print the same baseline resolution as every other figure in the paper
+        # even though the data here is calibrated on the <=511 keV points.
+        'calib_label_triexp':    {'k': round(calibs['label_triexp'][0], 3)},
+        'calib_label_maxbase':   {'k': round(calibs['label_maxbase'][0], 3)},
     }
     json_dir = os.path.join(os.path.dirname(os.path.abspath(output)), 'json')
     os.makedirs(json_dir, exist_ok=True)
@@ -314,11 +341,16 @@ def run(fit_dir, out_dir, suffix, energy_cut_triexp, energy_cut_maxbase, corr_mi
             print(f"No fit files with energy_kev <= {max_energy}")
             return
 
-    print(f"Computing energy calibrations (5-point zero-intercept, shared with "
-          f"plot_reconstruction_quality.py) from {fit_dir} …")
-    calibs = compute_calibrations(fit_dir)
+    if max_energy is None:
+        print(f"Computing energy calibrations from {fit_dir} "
+              f"(high-energy 5-point set — pass --max_energy to calibrate on "
+              f"the plotted range instead) …")
+    else:
+        print(f"Computing energy calibrations from {fit_dir} "
+              f"(points <= {max_energy:g} keV, i.e. the plotted range) …")
+    calibs = compute_calibrations(fit_dir, max_energy=max_energy)
     for tag, (k, b) in calibs.items():
-        print(f"  {tag:12s}: k={k:.2f} keV/V, b={b:.2f} keV")
+        print(f"  {tag:14s}: k={k:.2f} keV/V, b={b:.2f} keV")
 
     ds_tag   = os.path.basename(fit_dir)           # e.g. "efficiency_1p2mV"
     ds_short = ds_tag.replace('efficiency_', '')   # e.g. "1p2mV"
@@ -354,8 +386,14 @@ def main():
     parser.add_argument('--suffix',      default='')
     parser.add_argument('--model_cfg',   default=None, metavar='MODEL_DIR')
     parser.add_argument('--max_energy',  type=float, default=None,
-                        help='Only use/plot files with energy_kev <= this value '
-                             '(also restricts the calibration fit)')
+                        help='Only plot files with energy_kev <= this value. '
+                             'Does NOT restrict the calibration: since the '
+                             '2026-09-10 unification compute_calibrations() is '
+                             'passed fit_dir, not the filtered file list, and '
+                             'always uses the fixed 5 points in '
+                             'plot_utils.CALIB_ENERGIES_KEV (239-2615 keV). '
+                             '(Help text corrected 2026-09-22; it still claimed '
+                             'otherwise, which was only true before that change.)')
     args = parser.parse_args()
 
     suffix  = suffix_from_model_dir(args.model_cfg) if args.model_cfg else args.suffix

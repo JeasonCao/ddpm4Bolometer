@@ -80,13 +80,17 @@ def _score(waveforms, fs, onset_idx, window_n, dead_n, match_pre_n, match_post_n
 
 def process_file(h5_path: str, nsigma: float, n_above: int,
                  use_fixed_threshold: bool, fixed_threshold: float,
-                 window_ms: float, dead_ms: float, match_pre_ms: float, match_post_ms: float):
+                 window_ms: float, dead_ms: float, match_pre_ms: float, match_post_ms: float,
+                 denoised_field: str = 'waveforms_denoised'):
     with h5py.File(h5_path, 'r') as f:
         energy_kev = float(f.attrs['energy_kev'])
         fs         = float(f.attrs['f_sample'])
         onset_s    = float(f.attrs['onset_s'])
         noisy      = f['waveforms_noisy'][:]
-        denoised   = f['waveforms_denoised'][:]
+        if denoised_field not in f:
+            raise KeyError(f"{os.path.basename(h5_path)} has no dataset '{denoised_field}' "
+                           f"(available: {[k for k in f.keys() if k.startswith('waveforms_denoised')]})")
+        denoised   = f[denoised_field][:]
         snr_db     = f['snr_db'][:]
 
     onset_idx   = int(round(onset_s * fs))
@@ -147,7 +151,8 @@ def process_file(h5_path: str, nsigma: float, n_above: int,
 
 
 def run(input_dirs, output_dir, nsigma, n_above, use_fixed_threshold,
-       fixed_threshold, window_ms, dead_ms, match_pre_ms, match_post_ms):
+       fixed_threshold, window_ms, dead_ms, match_pre_ms, match_post_ms,
+       denoised_field='waveforms_denoised'):
     json_dir = os.path.join(output_dir, 'json')
     raw_dir  = os.path.join(output_dir, 'raw')
     os.makedirs(json_dir, exist_ok=True)
@@ -167,7 +172,8 @@ def run(input_dirs, output_dir, nsigma, n_above, use_fixed_threshold,
         for fp in files:
             s, extra_n, extra_d, matched_n, matched_d, ntrig_n, ntrig_d = process_file(
                 fp, nsigma, n_above, use_fixed_threshold, fixed_threshold,
-                window_ms, dead_ms, match_pre_ms, match_post_ms)
+                window_ms, dead_ms, match_pre_ms, match_post_ms,
+                denoised_field=denoised_field)
             rows.append(s)
             all_ntrig_n.append(ntrig_n)
             all_ntrig_d.append(ntrig_d)
@@ -221,7 +227,7 @@ def main():
                     'Onset is used only for scoring (truth-matching), never in the decision.')
     parser.add_argument('--input_dir', nargs='+', required=True,
                         help='One or more directories of eval_efficiency_*.h5 files '
-                             '(must contain waveforms_noisy and waveforms_denoised)')
+                             '(must contain waveforms_noisy and the field given by --denoised_field)')
     parser.add_argument('--output_dir', default=os.path.join(_RESULTS_DIR, 'plots', 'trigger'))
     parser.add_argument('--nsigma',     type=float, default=4.0,
                         help='Threshold = mu_roll + nsigma*rms_roll (Octopus NRMSList default: 4.0)')
@@ -240,11 +246,17 @@ def main():
                         help='Scoring window extends this many ms BEFORE true onset [ms]')
     parser.add_argument('--match_post_ms', type=float, default=MATCH_POST_MS,
                         help='Scoring window extends this many ms AFTER true onset [ms]')
+    parser.add_argument('--denoised_field', default='waveforms_denoised',
+                        help='Which denoised dataset to score (2026-09-21). Default keeps the '
+                             'historical behaviour. Use waveforms_denoised_zeroinit for the '
+                             'zero-init method. Each field needs its own --output_dir, since the '
+                             'outputs are always labelled before/after regardless of the source.')
     args = parser.parse_args()
 
     run(args.input_dir, args.output_dir, args.nsigma, args.n_above,
         args.use_fixed_threshold, args.fixed_threshold,
-        args.window_ms, args.dead_ms, args.match_pre_ms, args.match_post_ms)
+        args.window_ms, args.dead_ms, args.match_pre_ms, args.match_post_ms,
+        denoised_field=args.denoised_field)
     print('\nAll done.')
 
 

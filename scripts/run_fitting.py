@@ -127,15 +127,20 @@ def _fit_pair(args):
 def fit_dataset(input_path: str, output_path: str,
                 workers: int,
                 chi2_max: float, amp_min: float, amp_max: float,
-                amp_dev: float):
+                amp_dev: float, denoised_field: str = 'waveforms_denoised'):
+    # NOTE 2026-09-16: denoised_field added to support comparing multiple
+    # denoising methods stored side-by-side in the same eval HDF5 (e.g. the
+    # 1.382mV 4-way run: waveforms_denoised_cold / _cold5shot / _warm5shot /
+    # _eta1_1shot) without needing separate copies of the noisy/clean/etc
+    # fields for each. Default keeps existing single-field callers unchanged.
 
     with h5py.File(input_path, 'r') as f:
-        if 'waveforms_denoised' not in f:
-            raise KeyError(f"waveforms_denoised not found in {input_path}. "
-                           "Run run_batch_inference.py first.")
+        if denoised_field not in f:
+            raise KeyError(f"{denoised_field} not found in {input_path}. "
+                           "Run the appropriate inference script first.")
         energy_kev  = float(f.attrs.get('energy_kev', np.nan))
         w_noisy     = f['waveforms_noisy'][:]
-        w_denoised  = f['waveforms_denoised'][:]
+        w_denoised  = f[denoised_field][:]
         # Use actual denoised count (may be truncated via --max_events)
         n_events    = min(len(w_noisy), len(w_denoised))
         snr_db      = f['snr_db'][:n_events]
@@ -265,6 +270,13 @@ def main():
     parser.add_argument('--amp_max',  type=float, default=DEFAULT_AMP_MAX)
     parser.add_argument('--amp_dev',  type=float, default=DEFAULT_AMP_DEV,
                         help='Max fractional amplitude deviation for efficiency flag')
+    parser.add_argument('--denoised_field', default='waveforms_denoised',
+                        help='HDF5 dataset name to fit as the "denoised" waveform '
+                             '(2026-09-16: for comparing multiple methods stored '
+                             'side-by-side, e.g. waveforms_denoised_cold / '
+                             '_cold5shot / _warm5shot / _eta1_1shot). Give each '
+                             'method its own --output_dir, or repeat runs will '
+                             'overwrite each other\'s output files.')
 
     args = parser.parse_args()
 
@@ -303,7 +315,8 @@ def main():
                     chi2_max=args.chi2_max,
                     amp_min=args.amp_min,
                     amp_max=args.amp_max,
-                    amp_dev=args.amp_dev)
+                    amp_dev=args.amp_dev,
+                    denoised_field=args.denoised_field)
 
     print("\nAll done.")
 

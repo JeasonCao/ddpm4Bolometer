@@ -91,21 +91,31 @@ def plot_reco_only(noise_tag, reco_data, output_path, threshold_pct=90.0, x_max=
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--reco_json_1p2mV', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency_1p2mV', 'json'))
-    ap.add_argument('--reco_json_7p5mV', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency_7p5mV', 'json'))
+    # 2026-09-22: generalized from the two hard-coded --reco_json_<tag> options
+    # to a tag/dir pair, mirroring plot_combined_efficiency.py, so the paper's
+    # move from 1.2 mV to 1.382 mV needs no further code change.
+    ap.add_argument('--noise_tags', nargs='+', default=['1p2mV', '7p5mV'])
+    ap.add_argument('--reco_json', nargs='+', default=None,
+                    help='Reco-efficiency JSON dir per noise tag, same order as --noise_tags')
     ap.add_argument('--output_dir', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency'))
+    ap.add_argument('--suffix', default='', help='Appended to output filenames, e.g. _zeroinit')
     ap.add_argument('--threshold', type=float, default=90.0)
     ap.add_argument('--max_energy', type=float, default=511.0)
     args = ap.parse_args()
 
-    dirs = {'1p2mV': args.reco_json_1p2mV, '7p5mV': args.reco_json_7p5mV}
+    reco_json = args.reco_json or [
+        os.path.join(_RESULTS_DIR, 'plots', f'efficiency_{t}', 'json') for t in args.noise_tags]
+    if len(reco_json) != len(args.noise_tags):
+        ap.error(f'--reco_json has {len(reco_json)} entries but '
+                 f'--noise_tags has {len(args.noise_tags)}')
+    dirs = dict(zip(args.noise_tags, reco_json))
     for method in ('triexp', 'maxbase'):
         for noise_tag, jdir in dirs.items():
             reco_data = _load_reco(jdir, noise_tag, args.max_energy, method=method)
             if reco_data is None:
                 print(f'No data for {noise_tag} ({method})')
                 continue
-            suffix = '' if method == 'triexp' else '_maxbase'
+            suffix = ('' if method == 'triexp' else '_maxbase') + args.suffix
             out = os.path.join(args.output_dir, f'reco_efficiency_standalone{suffix}_{noise_tag}.png')
             plot_reco_only(noise_tag, reco_data, out, threshold_pct=args.threshold, x_max=args.max_energy, method=method)
 

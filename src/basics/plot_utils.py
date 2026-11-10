@@ -99,30 +99,90 @@ def fit_energy_calibration(fit_files: list, which: str = 'noisy',
     return float(k), float(b)
 
 
-# 5 gamma-line-like calibration points shared by all scripts that need a
-# single canonical energy calibration (2026-09-10 unification — previously
-# plot_reconstruction_quality.py and plot_efficiency.py each computed their
-# own independent regression and disagreed by ~1%, e.g. 2.20 vs 2.22 keV
-# baseline resolution for the same 1.2mV noise level). Deliberately excludes
-# 3034 keV (the 0vbb ROI — real experiments don't calibrate on the signal
-# region itself).
+# 5 gamma-line-like calibration points, used by the figures that span the full
+# energy range (resolution vs energy, reconstructed amplitude vs true energy).
+# Deliberately excludes 3034 keV (the 0vbb ROI — real experiments don't
+# calibrate on the signal region itself).
+#
+# 2026-09-22: this is NOT the point set for every figure. The efficiency
+# figures (reconstruction efficiency, reconstruction + DT trigger) are plotted
+# only up to 511 keV and are calibrated on the points inside that range, via
+# the `calib_energies` argument below. That split is the project's long-
+# standing convention and predates 2026-09-09; a 2026-09-10 change collapsed
+# everything onto this one high-energy set, which was an over-correction to
+# what was really a figure-label inconsistency (2.20 vs 2.22 keV shown for the
+# same noise level) and was reverted on 2026-09-22.
+#
+# Why the split matters: the simulated detector response is mildly non-linear
+# (slope drifts 774 -> 788 keV/V from 1 to 3034 keV), so a high-energy-only
+# calibration leaves a +1 to +2% common-mode bias down at 1-50 keV. The
+# efficiency cut is |dE/E| < 5%, so that bias eats a large part of the
+# acceptance window and understates the measured efficiency by ~20% in
+# threshold terms.
 CALIB_ENERGIES_KEV = (239.0, 511.0, 727.0, 1461.0, 2615.0)
 
+# 2026-09-22: the calibration slope that DEFINES the noise levels, used only
+# for the "baseline resolution = ... keV" label on figures.
+#
+# The 1.382 mV noise level was chosen on 2026-09-12 by inverting
+#     FWHM_baseline = 2.355 * noise_rms * k
+# at k = 780.32 keV/V to land on CUORE's quoted 2.54 keV. Quoting the label
+# with a k refit from each figure's own data instead makes it drift (782.06
+# here, so the label read 2.55 keV) and invites exactly the question "we say
+# we match CUORE's number but we print something 0.01 keV away from it" —
+# which is the same class of problem as the 2.20-vs-2.22 inconsistency that
+# was (over-)corrected on 2026-09-10.
+#
+# The label is a property of the noise level, fixed when that level was
+# defined, so it takes the defining slope. It is NOT the calibration applied
+# to any figure's data — those use CALIB_ENERGIES_KEV or the <=511 keV set.
+#   1.382 mV -> 2.355 * 0.001382 * 780.32 = 2.54 keV
+#   7.5   mV -> 2.355 * 0.0075   * 780.32 = 13.78 keV
+CANONICAL_CALIB_K_KEV_PER_V = 780.32
 
-def fit_global_calibration_zero_intercept(fit_dir: str, method: str = 'triexp'):
+
+def baseline_resolution_kev(noise_rms_v: float) -> float:
+    """Baseline resolution FWHM in keV for a given noise RMS, at the canonical
+    calibration slope. Single source of truth for every figure's label."""
+    return 2.355 * noise_rms_v * CANONICAL_CALIB_K_KEV_PER_V
+
+
+def calib_energies_below(fit_dir: str, max_energy: float):
+    """Every energy point available in `fit_dir` at or below `max_energy`.
+
+    This is the calibration point set for the efficiency figures: they are
+    plotted over the same range they are calibrated on, so the response
+    non-linearity is absorbed by the fit instead of showing up as a bias.
+    """
+    out = []
+    for p in glob.glob(os.path.join(fit_dir, 'fit_efficiency_*keV.h5')):
+        stem = os.path.basename(p)[len('fit_efficiency_'):-len('keV.h5')]
+        try:
+            E = float(stem)
+        except ValueError:
+            continue
+        if E <= max_energy:
+            out.append(E)
+    return tuple(sorted(out))
+
+
+def fit_global_calibration_zero_intercept(fit_dir: str, method: str = 'triexp',
+                                          calib_energies=None):
     """Global multi-point calibration E = k*Amp, forced through the origin
     (b=0, so amp=0 <-> E=0 exactly — avoids the free-intercept version's
     failure mode where a small b fit from high-energy points only
     extrapolates to large, even negative, predicted energies at low
     amplitude/low energy).
 
-    Uses the 5 points in CALIB_ENERGIES_KEV, DENOISED Gaussian-fit means
-    (mirrors real experiments calibrating on their best/final-processing
-    amplitude estimator), inverse-variance weighted by the Gaussian fit's
-    own mu_err. Falls back to the raw denoised array's mean/SE when the
-    Gaussian fit didn't converge for a given point.
+    Uses DENOISED Gaussian-fit means (mirrors real experiments calibrating on
+    their best/final-processing amplitude estimator), inverse-variance
+    weighted by the Gaussian fit's own mu_err. Falls back to the raw denoised
+    array's mean/SE when the Gaussian fit didn't converge for a given point.
 
     method: 'triexp' or 'maxbase'.
+    calib_energies: point set to fit on. Defaults to CALIB_ENERGIES_KEV (the
+        5 gamma-line-like high-energy points) for the full-range figures; the
+        efficiency figures pass calib_energies_below(fit_dir, 511) instead.
 
     Returns (k [keV/V], residuals) where residuals is a tuple of
     (E_true, amp, E_pred, resid_keV) for the calibration points actually
@@ -130,9 +190,11 @@ def fit_global_calibration_zero_intercept(fit_dir: str, method: str = 'triexp'):
     """
     suf_d = 'triexp_denoised' if method == 'triexp' else 'maxbase_denoised'
     amp_key = 'amp_denoised' if method == 'triexp' else 'amp_maxbase_denoised'
+    if calib_energies is None:
+        calib_energies = CALIB_ENERGIES_KEV
 
     amps, errs, energies = [], [], []
-    for E in CALIB_ENERGIES_KEV:
+    for E in calib_energies:
         cands = glob.glob(
             os.path.join(fit_dir, f'fit_efficiency_{int(round(E))}keV.h5'))
         if not cands:
@@ -151,7 +213,7 @@ def fit_global_calibration_zero_intercept(fit_dir: str, method: str = 'triexp'):
     if len(energies) < 2:
         raise ValueError(
             f'Not enough calibration points found in {fit_dir} for method={method} '
-            f'(found {len(energies)}/{len(CALIB_ENERGIES_KEV)})')
+            f'(found {len(energies)}/{len(calib_energies)})')
 
     amps = np.array(amps); errs = np.array(errs); energies = np.array(energies)
     w = 1.0 / errs**2

@@ -41,18 +41,26 @@ from src.basics.plot_utils import (logistic4, fit_efficiency_curve,
                                    double_logistic, fit_efficiency_curve_double,
                                    timestamped_path)
 
-_NOISE_LABELS = {'1p2mV': '1.2 mV', '7p5mV': '7.5 mV'}
-_NOISE_RMS_V  = {'1p2mV': 0.0012, '7p5mV': 0.0075}
+# 2026-09-22: 1.382 mV added — it replaces 1.2 mV in the paper.
+_NOISE_LABELS = {'1p2mV': '1.2 mV', '1p382mV': '1.382 mV', '7p5mV': '7.5 mV'}
+_NOISE_RMS_V  = {'1p2mV': 0.0012, '1p382mV': 0.001382, '7p5mV': 0.0075}
 
 
-def _baseline_res_str(noise_tag, k):
-    """Baseline resolution FWHM in keV = 2.355 * noise_rms_V * k — pure
-    numeric conversion using this figure's own calibration slope, no
-    literature framing (that belongs in the paper text)."""
+def _baseline_res_str(noise_tag, k=None):
+    """Baseline resolution FWHM in keV for this noise level.
+
+    2026-09-22: uses the CANONICAL calibration slope that defined the noise
+    levels (plot_utils.CANONICAL_CALIB_K_KEV_PER_V), not this figure's own
+    refit slope — the label is a fixed property of the noise level and must
+    read identically on every figure. `k` is accepted and ignored so existing
+    call sites need no change. No literature framing here; that belongs in
+    the paper text.
+    """
+    from src.basics.plot_utils import baseline_resolution_kev
     rms_v = _NOISE_RMS_V.get(noise_tag)
-    if rms_v is None or k is None:
+    if rms_v is None:
         return _NOISE_LABELS.get(noise_tag, noise_tag)
-    return f'baseline resolution = {2.355 * rms_v * k:.2f} keV'
+    return f'baseline resolution = {baseline_resolution_kev(rms_v):.2f} keV'
 
 
 # ── data loaders ──────────────────────────────────────────────────────────────
@@ -79,8 +87,15 @@ def _load_reco(json_dir, noise_tag, max_energy, method='triexp'):
     eff_b_key  = f'eff_{method}_before'
     eff_a_key  = f'eff_{method}_after'
     cut_key    = f'energy_cut_{method}'
+    # The k returned here is used ONLY for the baseline-resolution label, so
+    # prefer the high-energy-set k that plot_efficiency.py records alongside
+    # the data calibration (2026-09-22): these figures are calibrated on the
+    # <=511 keV points, but every figure in the paper should quote the same
+    # baseline resolution. Falls back to the data k for older JSONs that
+    # predate the label field.
     calib_key  = f'calib_{method}_d'
-    k = records[0].get(calib_key, {}).get('k')
+    k = (records[0].get(f'calib_label_{method}', {}).get('k')
+         or records[0].get(calib_key, {}).get('k'))
     return (np.array([r['energy_kev'] for r in records]),
            np.array([r[eff_b_key]    for r in records]),
            np.array([r[eff_a_key]    for r in records]),
@@ -191,24 +206,40 @@ def plot_combined(noise_tag, reco_data, trig_data, output_path,
 
 def main():
     parser = argparse.ArgumentParser(description='Combined reconstruction + DT trigger efficiency plot')
-    parser.add_argument('--reco_json_1p2mV', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency_1p2mV', 'json'))
-    parser.add_argument('--reco_json_7p5mV', default=os.path.join(_RESULTS_DIR, 'plots', 'efficiency_7p5mV', 'json'))
+    # 2026-09-22: --noise_tags / --reco_json replace the two hard-coded
+    # --reco_json_<tag> options so a run can target any pair of noise levels
+    # (the paper moved from 1.2 mV to 1.382 mV). The two lists are positional
+    # partners: noise_tags[i] is read from reco_json[i].
+    parser.add_argument('--noise_tags', nargs='+', default=['1p2mV', '7p5mV'],
+                        help='Noise tags to plot, in order (must appear in _NOISE_RMS_V)')
+    parser.add_argument('--reco_json', nargs='+', default=None,
+                        help='Reco-efficiency JSON dir per noise tag, same order as --noise_tags')
     parser.add_argument('--trig_json',       default=os.path.join(_RESULTS_DIR, 'plots', 'trigger', 'json'))
     parser.add_argument('--output_dir',      default=os.path.join(_RESULTS_DIR, 'plots', 'combined'))
+    parser.add_argument('--suffix',          default='',
+                        help='Appended to output filenames, e.g. _zeroinit')
     parser.add_argument('--threshold',       type=float, default=90.0)
     parser.add_argument('--max_energy',      type=float, default=511.0)
     args = parser.parse_args()
 
-    reco_dirs = {'1p2mV': args.reco_json_1p2mV, '7p5mV': args.reco_json_7p5mV}
+    reco_json = args.reco_json or [
+        os.path.join(_RESULTS_DIR, 'plots', f'efficiency_{t}', 'json') for t in args.noise_tags]
+    if len(reco_json) != len(args.noise_tags):
+        parser.error(f'--reco_json has {len(reco_json)} entries but '
+                     f'--noise_tags has {len(args.noise_tags)}')
+    unknown = [t for t in args.noise_tags if t not in _NOISE_RMS_V]
+    if unknown:
+        parser.error(f'unknown noise tag(s) {unknown}; known: {sorted(_NOISE_RMS_V)}')
+    reco_dirs = dict(zip(args.noise_tags, reco_json))
 
     for method in ('triexp', 'maxbase'):
-        for noise_tag in ('1p2mV', '7p5mV'):
+        for noise_tag in args.noise_tags:
             reco_data = _load_reco(reco_dirs[noise_tag], noise_tag, args.max_energy, method=method)
             trig_data = _load_trigger(args.trig_json, noise_tag, args.max_energy)
             if reco_data is None and trig_data is None:
                 print(f'No data found for {noise_tag} ({method})')
                 continue
-            suffix = '' if method == 'triexp' else f'_{method}'
+            suffix = ('' if method == 'triexp' else f'_{method}') + args.suffix
             out = os.path.join(args.output_dir, f'combined_efficiency{suffix}_{noise_tag}.png')
             plot_combined(noise_tag, reco_data, trig_data, out,
                          threshold_pct=args.threshold, x_max=args.max_energy, method=method)

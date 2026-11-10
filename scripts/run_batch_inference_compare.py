@@ -16,14 +16,25 @@ against the same files without conflicting):
                                    automatically-chosen t_start, eta=1.0,
                                    5 shots averaged
 
-t_start is chosen per file automatically (no hand-tuned lookup table — this
-is the "production-ready auto t_start selection" the 2026-09-11 TODO asked
-for): match sqrt(1-alpha_bar[t]) to this file's noise_rms / typical
-per-window peak scale, using the file's own noiseless clean_template amplitude
+t_start: for the 6 higher-energy points (239/511/727/1461/2615/3034 keV) at
+1.382mV specifically, uses an empirically-tuned value from a 2026-09-15 local
+quick sweep (n=300/point) — the auto-selection formula alone was suboptimal
+there by a lot at the lower end of that range (e.g. 239 keV: auto t_start=0
+gives FWHM~0.70 keV, tuned t_start=5 gives ~0.26 keV, a 62% difference).
+Everywhere else (low-energy points, or any other noise level/file this script
+is pointed at), falls back to the analytical auto-selection formula: match
+sqrt(1-alpha_bar[t]) to this file's noise_rms / typical per-window peak
+scale, using the file's own noiseless clean_template amplitude
 (max_baseline_amplitude) as the scale reference. See the 2026-09-10/11 diary
-for why this is only an approximation (SDEdit re-noising doesn't perfectly
-reproduce the true forward-diffusion posterior) — good enough as a starting
-point for the comparison this script exists to run.
+for why the analytical version is only an approximation (SDEdit re-noising
+doesn't perfectly reproduce the true forward-diffusion posterior), and the
+2026-09-15 diary for the sweep that produced the tuned table below.
+
+Also picked DDIM(eta=1.0) over "DDPM-style" (eta=0, fresh random starts each
+shot) for the multi-shot averaging, per that same 2026-09-15 sweep: at 2615
+keV, DDIM(eta=1.0) beat the eta=0 variant by 5.6x on HF floor and 39% on
+FWHM. This was already the default here (eta=1.0 hardcoded below) — the
+sweep just confirmed it rather than changing anything.
 
 Always sub-batches (default 256, override with --batch_size) to avoid the
 attention-layer OOM/thrash bug hit twice already this project (09-09 diary:
@@ -55,6 +66,14 @@ from src.ddpm.unet_cond import UNet1DScaleCond
 from src.ddpm.schedule import DiffusionSchedule
 from src.ddpm.diffusion import GaussianDiffusion
 from src.basics.amplitude import max_baseline_amplitude
+
+# Empirically-tuned t_start, 1.382mV only, from the 2026-09-15 local sweep
+# (n=300/point) -- see module docstring. Energy in keV (rounded) -> t_start.
+# Any energy not in this table (low-energy points, or a different noise
+# level entirely) falls back to the analytical auto-selection formula.
+TUNED_T_START_1P382MV = {
+    239: 5, 511: 2, 727: 2, 1461: 3, 2615: 0, 3034: 0,
+}
 
 
 def load_model(model_path, device, scale_cond=False, T=50, beta_1=1e-4, beta_T=0.5,
@@ -136,16 +155,43 @@ def process_file(path, diffusion, device, batch_size, n_shots, overwrite, max_ev
 
     true_amp_V = max_baseline_amplitude(clean)
     sigma_normalized = noise_rms / true_amp_V
-    t_start = choose_t_start(diffusion.schedule, sigma_normalized)
+    E_rounded = int(round(energy_kev))
+    if E_rounded in TUNED_T_START_1P382MV:
+        t_start = TUNED_T_START_1P382MV[E_rounded]
+        t_source = 'tuned'
+    else:
+        t_start = choose_t_start(diffusion.schedule, sigma_normalized)
+        t_source = 'auto'
 
     print(f'Processing {os.path.basename(path)}  (E={energy_kev:.0f} keV, N={N}, '
-          f'noise_rms={noise_rms:.5f} V, sigma_norm={sigma_normalized:.4f} -> t_start={t_start})')
+          f'noise_rms={noise_rms:.5f} V, sigma_norm={sigma_normalized:.4f} -> t_start={t_start} [{t_source}])')
 
     fieldnames = ['timestamp', 'gpu_name', 'file', 'energy_kev', 'method', 'n_events',
                  't_start', 'n_shots', 'batch_size', 'elapsed_s', 'events_per_s']
 
+    # If the plain production script (run_batch_inference.py) already wrote a
+    # standard 'waveforms_denoised' field for this file (e.g. an opportunistic
+    # cold-start-only run kicked off early while other parameters were still
+    # being tuned), reuse it for the 'cold' method instead of recomputing --
+    # it's the exact same thing (DDIM, eta=0, 1 shot, full T steps).
+    reused_cold = None
+    with h5py.File(path, 'r') as f:
+        if 'waveforms_denoised' in f and f['waveforms_denoised'].shape[0] >= N:
+            reused_cold = f['waveforms_denoised'][:N]
+
     results = {}
     for label, mode in [('cold', 'cold'), ('cold5shot', 'stochastic'), ('warm5shot', 'warmstart')]:
+        if label == 'cold' and reused_cold is not None:
+            results['cold'] = reused_cold
+            print(f'  [cold      ] reused from existing waveforms_denoised field (0.0s)')
+            if timing_csv:
+                _append_timing_csv(timing_csv, dict(
+                    timestamp=datetime.now().strftime('%Y%m%d_%H%M%S'),
+                    gpu_name=gpu_name or 'unknown', file=os.path.basename(path),
+                    energy_kev=energy_kev, method='cold_reused', n_events=N, t_start='',
+                    n_shots=1, batch_size=batch_size, elapsed_s=0.0, events_per_s='',
+                ), fieldnames)
+            continue
         t0 = time.time()
         out = denoise_batched(diffusion, noisy, device, mode, t_start, n_shots, 1.0, batch_size)
         elapsed = time.time() - t0
