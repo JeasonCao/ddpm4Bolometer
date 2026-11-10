@@ -377,23 +377,18 @@ def main():
                         help='Directory of fit HDF5 files (fit_efficiency_*.h5)')
     parser.add_argument('--energy_cut_triexp',  type=float,
                         default=DEFAULT_ENERGY_CUT_TRIEXP,
-                        help=f'Tri-exp energy efficiency cut (default {DEFAULT_ENERGY_CUT_TRIEXP:.0%})')
+                        help=f'Tri-exp energy efficiency cut (default {DEFAULT_ENERGY_CUT_TRIEXP * 100:.0f}%%)')
     parser.add_argument('--energy_cut_maxbase', type=float,
                         default=DEFAULT_ENERGY_CUT_MAXBASE,
-                        help=f'Max-baseline energy cut (default {DEFAULT_ENERGY_CUT_MAXBASE:.0%})')
+                        help=f'Max-baseline energy cut (default {DEFAULT_ENERGY_CUT_MAXBASE * 100:.0f}%%)')
     parser.add_argument('--corr_min',    type=float, default=DEFAULT_CORR_MIN)
     parser.add_argument('--output_dir',  default=None)
     parser.add_argument('--suffix',      default='')
     parser.add_argument('--model_cfg',   default=None, metavar='MODEL_DIR')
     parser.add_argument('--max_energy',  type=float, default=None,
-                        help='Only plot files with energy_kev <= this value. '
-                             'Does NOT restrict the calibration: since the '
-                             '2026-09-10 unification compute_calibrations() is '
-                             'passed fit_dir, not the filtered file list, and '
-                             'always uses the fixed 5 points in '
-                             'plot_utils.CALIB_ENERGIES_KEV (239-2615 keV). '
-                             '(Help text corrected 2026-09-22; it still claimed '
-                             'otherwise, which was only true before that change.)')
+                        help='Plot and calibrate on energies <= this value. '
+                             'Without it, use the standard five calibration energies. '
+                             'The baseline-resolution label uses a separate reference calibration.')
     args = parser.parse_args()
 
     suffix  = suffix_from_model_dir(args.model_cfg) if args.model_cfg else args.suffix

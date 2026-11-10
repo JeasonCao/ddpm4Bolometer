@@ -4,3 +4,15 @@ results
 *.pyc
 __pycache__/
 reference/
+
+# Local experiments, runtime artifacts and dependencies
+/scratch/
+/runs/
+*.log
+*.lock
+*.partial.h5
+.venv/
+.env
+.env.*
+/deps/
+/plot_deps/
