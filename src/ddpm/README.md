@@ -32,9 +32,18 @@ python3 -u scripts/denoise_test_set.py --scale_emb --film \
 The test script uses a seeded Gaussian start and skips per-step noise
 injection, matching the `--no_noise` sampler convention. Formal resolution
 comparisons use the existing held-out event windows, the `Fit_Jiaxuan` fitter,
-and the same cuts and energy calibration for both models. The old batch
-evaluation scripts still need a check with the new checkpoint before the
-full comparison. Historical warm-start scripts can be reproduced from
+and the same cuts and energy calibration for both models. Run batch
+inference on a writable copy of an evaluation HDF5. It keeps the
+waveforms_denoised field expected by the original fitting script.
+
+```bash
+python3 -u scripts/run_batch_inference.py --model_path "$RUN/best_model.pt" \
+    --input /path/to/writable_eval_copy.h5 --scale_emb --film \
+    --sampler ddpm --no_noise --max_events 2
+```
+
+Pass the training schedule flags when they differ from the defaults.
+This no_noise path runs in float32. Historical warm-start scripts can be reproduced from
 `Fit_Jiaxuan` (`780d190`).
 
 New clean shards default to ODE. New noise shards default to the original
