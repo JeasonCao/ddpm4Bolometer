@@ -5,3 +5,20 @@ __pycache__/
 *.root
 data/
 plots/
+
+diary/
+results/
+results
+reference/
+
+# Local experiments, runtime artifacts and dependencies
+/scratch/
+/runs/
+*.log
+*.lock
+*.partial.h5
+.venv/
+.env
+.env.*
+/deps/
+/plot_deps/

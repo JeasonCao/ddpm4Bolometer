@@ -1,6 +1,6 @@
 # Pulse Simulator
 
-Physics-based simulation of CUORE cryogenic bolometer pulses for generating clean training data.
+Physics-based simulation of CUORE cryogenic bolometer pulses for generating clean training data. The default generator uses ODE and redraws detector parameters per window. The existing ODE shards remain the training input. The analytic tri-exponential and channel-bank layouts are optional.
 
 ## Physics Model
 
@@ -117,8 +117,7 @@ are also **mapped onto the generated range** instead of being used literally:
 
 The peak stays at E·sens because phi_peak is recomputed per pulse, so the
 pulse integral grows slightly faster than linearly. In pileup each pulse uses
-the τ of its own energy. Note that `src/basics/fit.py`'s `triexp_double`
-assumes shared τ, so it carries a small systematic error on such windows.
+the τ of its own energy. The project fitter uses a sequential pileup fit with independent decay constants. Historical QA with shared time constants used the fitter from `b5cd470`.
 
 Each pulse's actual τ is stored per window as `tau_r_1`, `tau_d1_1`,
 `tau_d2_1` and the matching `_2` datasets (NaN when there is no second pulse).
@@ -139,8 +138,8 @@ Output layout is unchanged except that:
 - There is no `equilibrium` group or `eq_*` attrs.
 - Every file carries `pulse_model` = `ode` | `triexp`.
 
-Scripts that re-simulate or copy ODE fields need ODE files:
-`scripts/prepare_pileup_joint_targets.py` and `scripts/denoise_test_set.py`.
+`scripts/denoise_test_set.py` supports both clean layouts and copies
+equilibrium information when present.
 
 ## Energy Spectrum
 

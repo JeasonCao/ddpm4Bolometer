@@ -1,41 +1,20 @@
 # Bolometer Pulse Denoiser
 
+Research code organization: [code layout](docs/CODE_LAYOUT.md), [collaboration conventions](AGENTS.md), and [2026-11-10 migration/validation](docs/reorganization_20261110/README.md).
+
 Generative-model-based denoising of cryogenic bolometer pulse signals from the [CUORE experiment](https://cuore.lngs.infn.it/). CUORE searches for neutrinoless double-beta decay using 988 TeO2 bolometers at ~10 mK. Each channel records voltage pulses proportional to deposited energy, contaminated by thermal and electronic noise. This project trains conditional generative models to recover clean pulse waveforms from noisy observations to improve energy resolution.
 
-## Quick Start (current model: scale embedding + FiLM)
+## Quick Start
 
-Four steps. `M` is the data root, `D` the model directory.
+Train the scale embedding + FiLM model on the existing ODE clean shards and
+synthetic noise shards. See [DDPM training and evaluation](src/ddpm/README.md#quick-start)
+for the commands and the holdout workflow. For new generated data, the default
+clean model is ODE and the default noise mode writes one HDF5 per shard. The
+tri-exponential pulse model and paired noise are available as explicit options.
 
-```bash
-M=/media/Disk_YIN/yunshancheng/cuore
-D=$M/my_new_model
-
-# 1. Clean training + test data (tri-exp pulses). Noise: $M/noise_v2/noise_total
-python3 -u scripts/generate_clean_shards.py --output_dir $M/clean_triexp \
-    --model triexp --tau_energy_scaling
-python3 -u scripts/generate_clean_shards.py --output_dir $M/clean_triexp/test \
-    --model triexp --tau_energy_scaling --n_shards 1 --base_seed 99999
-
-# 2. Train
-mkdir -p $D
-nohup stdbuf -oL python3 -u -m src.ddpm.train \
-    --clean_dir $M/clean_triexp --noise_dir $M/noise_v2/noise_total \
-    --output_dir $D --loss l2 --scale_emb --film --amp \
-    --epochs 100 --batch_size 32 --lr 2e-4 --num_workers 4 \
-    > $D/train.log 2>&1 &
-
-# 3. Denoise the test set
-python3 -u scripts/denoise_test_set.py --scale_emb --film \
-    --clean_h5 $M/clean_triexp/test/clean_000.h5 \
-    --noise_h5 $M/noise_v2/noise_total/test/noise_000.h5 \
-    --model_path $D/best_model.pt --output $D/denoised_test_000.h5
-
-# 4. Plots + metrics -> $D/qa_test/
-python3 -u scripts/plot_triexp_inference.py --denoised_h5 $D/denoised_test_000.h5
-```
-
-`--scale_emb --film` must be passed at training **and** at every inference step.
-Already have data? Skip step 1.
+The high-energy comparison uses identical evaluation events, sampling settings,
+fit rules and calibration for the old and new model. Compare with the independent
+[window OF tool](scripts/window_of_README.md).
 
 ## Data Pipeline
 
@@ -47,10 +26,10 @@ Physics-based simulation of clean bolometer pulses. A nonlinear electro-thermal 
 - Thermistor readout: voltage pulse from temperature-dependent resistance R(T) = R0 * exp((T0/T)^0.5)
 - Signal chain: 10 kHz ODE → 120 Hz Bessel low-pass → 1 kHz output (10-second windows, 10000 samples)
 - Detector parameters randomized per pulse to capture channel-to-channel variation across 988 channels
-- Energy sampled from measured CUORE spectrum (`figS2_spectrum.root`), range (0, 5407] keV
+- Default generation range: 1–5407 keV. The energy sampler reads `data/cuore_spectrum.npz` when available and uses a parametric spectrum otherwise.
 - 70% single pulses (onset at 1.5 s), 30% pileup (second pulse 0.01–2.0 s after first)
 
-Output: HDF5 shards with `waveforms` (N, 10000), `energies`, `onsets`, `is_pileup`, `params`.
+Output: HDF5 shards with `waveforms` (N, 10000), `energies_1/2`, `onsets_1/2`, `is_pileup`, `params`, and ODE `equilibrium`.
 
 ### Noise (`src/noise/`)
 
@@ -62,7 +41,7 @@ Realistic synthetic noise generator combining five sources observed in real CUOR
 4. **White noise floor** — independent Gaussian
 5. **Mechanical resonances** — 3–6 narrowband peaks from seismic/equipment vibrations
 
-All components summed, modulated by a slow amplitude envelope (<0.2 Hz), Bessel-filtered at 120 Hz, and decimated to 1 kHz. RMS scaled to ~7.5 mV. For training, real noise windows extracted from LUCE data are used instead.
+All components summed, modulated by a slow amplitude envelope (<0.2 Hz), Bessel-filtered at 120 Hz, and decimated to 1 kHz. In the default mode each window is scaled to its sampled target RMS. The existing training and holdout noise shards are synthetic.
 
 ### Common Signal Processing (`src/basics/`)
 
@@ -73,8 +52,8 @@ Shared Bessel low-pass filter (6th order, 120 Hz) matching the CUORE DAQ anti-al
 Training pairs are formed by adding noise to clean pulses: `x_noisy = x_clean + noise`. Clean-noise pairings are reshuffled each epoch for combinatorial augmentation. Per-window normalization by max(|noisy|) maps inputs to ~[-1, 1].
 
 ```
-clean/clean_000.h5 ... clean_009.h5   (simulated clean pulses)
-noise/noise_000.h5 ... noise_009.h5   (real noise from LUCE)
+clean/clean_*.h5                    (existing simulated ODE pulses)
+noise/noise_*.h5                    (existing synthetic noise shards)
 ```
 
 ## Denoising Models
@@ -88,7 +67,7 @@ Denoising Diffusion Probabilistic Model — the primary denoising framework.
 - **Architecture**: 1D U-Net (~15.1M params), 4-level encoder-decoder with skip connections, self-attention at bottleneck. Input: [x_t, x_tilde] concatenated (2 channels). Output: predicted noise.
 - **Scale conditioning** (optional): encodes max(|noisy|) so the model knows the SNR regime
 - **Loss**: L1 or L2 on noise prediction, plus optional spectral losses (SC, LSD, J_asd) on the implied clean estimate
-- **Inference**: Stochastic reverse process with multi-shot (M=10) averaging. DDIM sampler also available.
+- **Inference**: Gaussian start with no noise added during the reverse steps for the planned paired evaluation. Stochastic DDPM and DDIM are also available.
 
 See [`src/ddpm/README.md`](src/ddpm/README.md) for full details.
 
@@ -141,12 +120,12 @@ nohup stdbuf -oL python3 -u -m src.flowMatching.train \
 ### Inference
 
 ```bash
-# DDPM
+# DDPM with the scale embedding + FiLM model
 python3 -u -m src.ddpm.inference \
     --model_path /path/to/best_model.pt \
     --clean_dir /path/to/clean/clean_001.h5 \
     --noise_dir /path/to/noise/noise_001.h5 \
-    --output qa_inference.png --n 10
+    --output qa_inference.png --n 10 --scale_emb --film --no_noise
 
 # Flow Matching
 python3 -u -m src.flowMatching.inference \
@@ -158,7 +137,7 @@ python3 -u -m src.flowMatching.inference \
 
 ### Paper figures
 
-Reproducible paper plots live under `scripts/plot_*_paper.py`. They all write to `plots/paper/` and share a fixed set of 4 canonical (clean, noise) examples — 2 singles and 2 pileups at low + high energy — selected deterministically at seed=0.
+Paper plots live under `scripts/plot_*_paper.py`. The denoising example figure selects two singles and two pileups from a saved test HDF5 using the clean peak amplitude.
 
 ```bash
 # Reverse-diffusion trajectory snapshots (x_T → x_0 for one 40 mV pulse)
@@ -167,8 +146,9 @@ PYTHONPATH=. python3 scripts/plot_trajectory_paper.py
 # Overview of the 4 canonical datasets: time domain + PSD, clean/noisy/noise
 PYTHONPATH=. python3 scripts/plot_datasets_paper.py
 
-# DDPM deterministic denoising on the same 4 examples: time + PSD, noisy vs denoised
-PYTHONPATH=. python3 scripts/plot_denoising_paper.py
+# Waveforms and PSD from saved denoising results
+PYTHONPATH=. python3 scripts/plot_denoising_paper.py \
+    --denoised_h5 /path/to/denoised_test_000.h5 --out plots/paper/denoising_examples.pdf
 ```
 
 Scatter plots from existing DDPM inference runs (no GPU needed):

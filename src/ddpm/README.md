@@ -2,42 +2,45 @@
 
 Denoising Diffusion Probabilistic Model (DDPM) for denoising cryogenic bolometer pulse signals from the CUORE experiment.
 
-## Quick Start (current model: scale embedding + FiLM)
+## Quick Start
 
-Four steps. `M` is the data root, `D` the model directory.
+Use the existing ODE clean shards and synthetic noise shards. Set `DATA` to
+the cloud directory that contains `simu_data/` and `RUN` to a new model output
+directory. Start from a fresh scale embedding + FiLM model.
 
 ```bash
-M=/media/Disk_YIN/yunshancheng/cuore
-D=$M/my_new_model
-
-# 1. Clean training + test data (tri-exp pulses). Noise: $M/noise_v2/noise_total
-python3 -u scripts/generate_clean_shards.py --output_dir $M/clean_triexp \
-    --model triexp --tau_energy_scaling
-python3 -u scripts/generate_clean_shards.py --output_dir $M/clean_triexp/test \
-    --model triexp --tau_energy_scaling --n_shards 1 --base_seed 99999
-
-# 2. Train
-mkdir -p $D
-nohup stdbuf -oL python3 -u -m src.ddpm.train \
-    --clean_dir $M/clean_triexp --noise_dir $M/noise_v2/noise_total \
-    --output_dir $D --loss l2 --scale_emb --film --amp \
-    --epochs 100 --batch_size 32 --lr 2e-4 --num_workers 4 \
-    > $D/train.log 2>&1 &
-
-# 3. Denoise the test set
-python3 -u scripts/denoise_test_set.py --scale_emb --film \
-    --clean_h5 $M/clean_triexp/test/clean_000.h5 \
-    --noise_h5 $M/noise_v2/noise_total/test/noise_000.h5 \
-    --model_path $D/best_model.pt --output $D/denoised_test_000.h5
-
-# 4. Plots + metrics -> $D/qa_test/
-python3 -u scripts/plot_triexp_inference.py --denoised_h5 $D/denoised_test_000.h5
+DATA=/path/to/project-data
+RUN=/path/to/new-model-run
+python3 -u -m src.ddpm.train \
+    --clean_dir "$DATA/simu_data/clean" \
+    --noise_dir "$DATA/simu_data/noise" \
+    --output_dir "$RUN" --scale_emb --film
 ```
 
-`--scale_emb --film` must be passed at training **and** at every inference step.
-Already have data? Skip step 1.
+Record the resolved configuration. Match the architecture and diffusion
+settings from training at inference. To run a small QA sample once weights
+are available, specify clean and noise shards from the held-out inputs.
 
-Everything below is background and reference.
+```bash
+python3 -u scripts/denoise_test_set.py --scale_emb --film \
+    --clean_h5 "$DATA/simu_data/clean_holdout/clean_000.h5" \
+    --noise_h5 "$DATA/simu_data/noise_holdout/noise_000.h5" \
+    --model_path "$RUN/best_model.pt" --n_limit 32 \
+    --output "$RUN/qa_smoke.h5"
+```
+
+The test script uses a seeded Gaussian start and skips per-step noise
+injection, matching the `--no_noise` sampler convention. Formal resolution
+comparisons use the existing held-out event windows, the `Fit_Jiaxuan` fitter,
+and the same cuts and energy calibration for both models. The old batch
+evaluation scripts still need a check with the new checkpoint before the
+full comparison. Historical warm-start scripts can be reproduced from
+`Fit_Jiaxuan` (`780d190`).
+
+New clean shards default to ODE. New noise shards default to the original
+single-file format. See [pulse generation](../pulse/README.md) and
+[noise generation](../noise/README.md) for the optional tri-exponential and
+paired modes and use held-out seeds for any new test set.
 
 ## Task
 
@@ -272,11 +275,11 @@ src/ddpm/
 HDF5 shards in separate directories:
 
 ```
-clean/clean_000.h5 ... clean_009.h5   (simulated clean pulses)
-noise/noise_000.h5 ... noise_009.h5   (real noise windows from LUCE)
+clean/clean_*.h5                    (simulated ODE pulses)
+noise/noise_*.h5                    (synthetic noise windows)
 ```
 
-Each shard contains a `waveforms` dataset of shape (N, 10000) and an `n_windows` attribute.
+Each shard contains a `waveforms` dataset of shape (N, 10000) and a window-count attribute (`n_windows` or `n_pulses`).
 
 ## Usage
 
@@ -445,16 +448,12 @@ python3 -u -m src.ddpm.inference ... --sampler ddim --ddim_steps 10
 # DDIM with partial stochasticity
 python3 -u -m src.ddpm.inference ... --sampler ddim --eta 0.5
 
-# deterministic inference
-   nohup stdbuf -oL python3 -u -m src.ddpm.inference \                                                                                                            
-     --model_path /media/AVFD/yunshancheng/cuore/ddpm_l1/best_model.pt \                                                                                          
-     --clean_dir /media/AVFD/yunshancheng/cuore/clean/clean_001.h5 \                                                                                              
-     --noise_dir /media/AVFD/yunshancheng/cuore/noise/noise_001.h5 \                                                                                              
-     --T 50 --n 10 --filter low_pileup \                                                                                                                          
-     --output /media/AVFD/yunshancheng/cuore/ddpm_l1/qa_low_pileup_deterministic.png \                                                                            
-     --no_noise \                                                                                                                                                 
-     > /media/AVFD/yunshancheng/cuore/ddpm_l1/inference_deterministic.log 2>&1 &                                                                                  
-   echo $!  
+# Gaussian start, with no per-step reverse noise
+python3 -u -m src.ddpm.inference \
+    --model_path /path/to/best_model.pt \
+    --clean_dir /path/to/heldout/clean_000.h5 \
+    --noise_dir /path/to/heldout/noise_000.h5 \
+    --scale_emb --film --no_noise --n 10 --output qa_inference.png
 ```
 
 ### Evaluation Metrics
@@ -475,13 +474,11 @@ Spectral:
 - **J_asd**: ASD ratio — mean sqrt(PSD_residual / PSD_target)
 
 Peak analysis (`src/basics/fit.py`):
-- **Model**: tri-exponential pulse (Carrettoni & Vignati 2011) — one rise + a fast/slow decay mixture: `phi(u) = -exp(-u/τ_r) + α·exp(-u/τ_d1) + (1-α)·exp(-u/τ_d2)`. The two-decay form matches the bolometer thermal response (fast electron-phonon relaxation + slow phonon escape); a single-decay biexponential underfits and biases χ²/ndf.
-- **Constraints** (matched to QA convention): baseline B fixed = mean of first 1500 samples, first-pulse onset t01 fixed = 1.5 s, pileup separation t02 ∈ [t01+0.01, t01+2.0] s.
-- **Pileup parametrization**: the two pulses share (τ_r, τ_d1, τ_d2) — one detector, one thermal response — but each gets its own (A, α). 10 model params total (8 free).
-- **Initial guess**: `scipy.signal.find_peaks` on a Gaussian-smoothed signal, ranked by **prominence** to ignore ripples on the decay slope, with parabolic sub-sample refinement.
-- **Peak amplitude / time**: derived from the fit — `peak_amp = A · max(phi)` and `peak_time = t0 + argmax(phi)`, both computed numerically per pulse since the tri-exp shape has no closed-form peak.
-- **χ²/ndf**: plain `SSR / (N − len(popt))`, unweighted. Same value across (clean, noisy, 1-shot, 10-shot) is comparable.
-- **Reported metrics**: `Pk amp` (mV), `Pk amp%` (relative error vs clean), `Pk dt ms` (timing error vs clean). Pileup pulses are sorted by peak time and matched between clean and denoised by index.
+- **Model**: tri-exponential pulse with one rise and two decays. Baseline and onset are fitted within their bounds.
+- **Pileup**: fit the first pulse, subtract it, and fit the second pulse on the residual. The returned vector contains 13 parameters with independent decay constants. Reconstruct a successful fit with `result.model_fn(t, *result.params)`.
+- **Peak amplitude and time**: obtained from the maximum of the fitted pulse. The prefactor `A` is distinct from the peak amplitude.
+- **χ²/ndf**: residuals divided by the estimated pre-trigger noise standard deviation (or the supplied noise scale), squared and summed, then divided by the degrees of freedom. The older shared-time-constant fit and its unscaled residual statistic are available in `b5cd470` for historical QA reproduction.
+- **Reported metrics**: peak amplitudes and timing errors are compared only when both fits succeed.
 
 ### QA Plot Layout
 
@@ -491,9 +488,47 @@ The inference QA plot has 4 columns per sample:
 3. **PSD**: Power spectral density comparing clean, noisy, and 10-shot denoised
 4. **Metrics**: Per-sample metrics table with all numeric results
 
-## Results: `ddpm_triexp_scale_film`
+## Historical results: `ddpm_triexp_scale_film`
 
-Commands: see Quick Start at the top. Resume to more epochs with `--resume $D/checkpoint_100.pt --epochs 200 --lr 1e-4`.
+These results come from the tri-exponential and paired-noise experiment using its original QA. The planned ODE run uses its own training configuration and evaluation.
+
+<details>
+<summary>Original training and test commands</summary>
+
+Historical training and test recipe from yunshan’s tri-exponential/paired-noise experiment. `M` is the original data root and `D` the model directory.
+
+```bash
+M=/media/Disk_YIN/yunshancheng/cuore
+D=$M/my_new_model
+
+# 1. Clean training + test data (tri-exp pulses). Noise: $M/noise_v2/noise_total
+python3 -u scripts/generate_clean_shards.py --output_dir $M/clean_triexp \
+    --model triexp --tau_energy_scaling
+python3 -u scripts/generate_clean_shards.py --output_dir $M/clean_triexp/test \
+    --model triexp --tau_energy_scaling --n_shards 1 --base_seed 99999
+
+# 2. Train
+mkdir -p $D
+nohup stdbuf -oL python3 -u -m src.ddpm.train \
+    --clean_dir $M/clean_triexp --noise_dir $M/noise_v2/noise_total \
+    --output_dir $D --loss l2 --scale_emb --film --amp \
+    --epochs 100 --batch_size 32 --lr 2e-4 --num_workers 4 \
+    > $D/train.log 2>&1 &
+
+# 3. Denoise the test set
+python3 -u scripts/denoise_test_set.py --scale_emb --film \
+    --clean_h5 $M/clean_triexp/test/clean_000.h5 \
+    --noise_h5 $M/noise_v2/noise_total/test/noise_000.h5 \
+    --model_path $D/best_model.pt --output $D/denoised_test_000.h5
+
+# 4. Plots + metrics -> $D/qa_test/
+python3 -u scripts/plot_triexp_inference.py --denoised_h5 $D/denoised_test_000.h5
+```
+
+`--scale_emb --film` must be passed at training **and** at every inference step.
+Already have data? Skip step 1.
+
+</details>
 
 Test set: 10000 windows, 30.6 % pileup.
 
@@ -557,6 +592,8 @@ Observations that drive the next steps:
 | `--w_lsd` | 0.0 | Log-Spectral Distance weight on x̂_0. 0 disables. |
 | `--w_asd` | 0.0 | J_asd (ASD ratio, DeepClean / CUORE metric) weight on x̂_0. 0 disables. |
 | `--resume` | None | Path to a `checkpoint_*.pt` (or `best_model.pt`) to resume from. Restores model, optimizer, epoch, and `best_val_loss`. Cosine LR is rebuilt for the remaining epochs starting at `--lr` (no warm-up). |
+| `--preload` | False | Read clean and noise waveforms into system RAM before training. |
+| `--patience` | 0 | Stop after this many epochs without validation improvement; 0 disables early stopping. |
 | `--amp` | False | Enable mixed-precision (float16) training via `torch.cuda.amp`. |
 | `--compile` | False | Wrap the U-Net in `torch.compile` for kernel fusion (slower first epoch). |
 | `--scale_cond` | False | Legacy: use `UNet1DScaleCond` instead of `UNet1D`. Only for old checkpoints. Must match at inference. |
@@ -611,16 +648,15 @@ GPU and re-run in seconds.
   - `--base_seed` (42): RNG seed; shard `k` uses `base_seed + 1000*k`.
   - `--E_min` (1.0) / `--E_max` (5407.0): energy range in keV.
   - `--pileup_fraction` (0.3): fraction of windows that are two-pulse pileups.
+  - `--model` (`ode`): use `triexp` to select the analytic pulse template.
 
-- **`generate_noise_shards.py`** — generates three paired noise families
-  (`noise_periodic/`, `noise_white/`, `noise_total/`). For each window
-  `i` of shard `NNN`, the three folders contain the matched
-  periodic / white / mixed components plus the per-window mix metadata
-  (`alpha`, `beta`, `r=α²`, `scale`) used by downstream
-  metrics-vs-mix scripts.
-  - `--output_dir`: root for the three subdirs (default
-    `/media/Disk_YIN/yunshancheng/cuore/noise_v2`).
-  - `--split` (''): optional subdir under each of `noise_*/` (e.g. `test`).
+- **`generate_noise_shards.py`** — writes one `noise_NNN.h5` per shard by
+  default with the original parameter sampling and `waveforms`/`params` layout.
+  - `--mode paired`: write matching `noise_periodic/`, `noise_white/` and
+    `noise_total/` shards. Only total shards contain the mix metadata.
+  - `--n_channels`: generate a paired channel bank with fixed parameters per channel.
+  - `--output_dir`: pass a separate output directory for the intended dataset.
+  - `--split`: optional subdirectory such as `test`.
   - `--n_shards` (10), `--windows_per_shard` (10000), `--base_seed` (7777):
     same semantics as for clean shards.
 
@@ -634,9 +670,9 @@ scripts at the resulting HDF5.
   HDF5 mirroring the clean/noise layout: `waveforms` (denoised),
   `waveforms_clean`, `waveforms_noisy`, `scale`, plus copies of
   per-window detector params, equilibrium state, noise params, and the
-  `noise/mix/{alpha, beta, r, scale}` metadata.
-  - `--clean_h5` (required), `--noise_h5` (required, must contain
-    `/mix/`), `--model_path` (required), `--output` (required H5 path).
+  `noise/mix/{alpha, beta, r, scale}` metadata when present.
+  - `--clean_h5`, `--noise_h5`, `--model_path`, `--output` are required.
+    `--noise_h5` accepts a legacy shard or a paired `noise_total` shard.
   - `--T` (50), `--beta_1` (1e-4), `--beta_T` (0.5), `--cond_mode`
     (`step`): must match the training schedule of `--model_path`.
   - `--scale_cond` / `--scale_emb` / `--film`: architecture flags, must
@@ -754,7 +790,7 @@ scripts at the resulting HDF5.
 
 - **`debug_pileup_fit_fail.py`** — runs DDPM inference on a handful of
   pileup samples, fits clean / noisy / 1-shot / 10-shot with
-  `triexp_double`, and flags any fit that raised in `curve_fit` or
+  the project fitter, and flags any fit that failed or
   pinned a rail (τ bound). Plots data+fit overlays for the bad windows
   and prints params, bounds, and χ²/ndf.
   - `--model_path`, `--clean_dir`, `--noise_dir` (required).

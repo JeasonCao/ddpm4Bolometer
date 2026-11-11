@@ -1,0 +1,563 @@
+{
+  "snapshot_commit": "8e8e3e6",
+  "files": [
+    {
+      "old": "scripts/plot_bessel_comparison.py",
+      "new": "analysis/bessel/plot_bessel_comparison.py",
+      "source_sha256": "4efe1164c32796d3ff7a7e58b4c4b73c4942d4ea45243a5db5b070a64c2da4fb",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/plot_bessel_resolution.py",
+      "new": "analysis/bessel/plot_bessel_resolution.py",
+      "source_sha256": "edf541db16f43450d67fad1bc7f13ebbed21b1eac3646cda11ce5a1129c663fe",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/check_template_linearity.py",
+      "new": "analysis/templates/check_template_linearity.py",
+      "source_sha256": "e97c6d21b3ae6d08a1e0cd09ff47e9efd575d12592d8d697ed33937c95611b8c",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/plot_template_energy_shape.py",
+      "new": "analysis/templates/plot_template_energy_shape.py",
+      "source_sha256": "d020282bbb8f64e8b5cf99b8d978722ccf28d85afb6bcca37fb11f3a67fb15fb",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/plot_template_peak_linearity.py",
+      "new": "analysis/templates/plot_template_peak_linearity.py",
+      "source_sha256": "4ca2da01c564fa6335557b7b7ac10c6ca5490081972856a7fbe556b8ac7546ca",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/compose_paper_figure.py",
+      "new": "analysis/paper/compose_paper_figure.py",
+      "source_sha256": "48bfbbc5162d993d4174fff5b749037ef3127c2076abd3abb4af917af4012988",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/plot_spectrum_15keV_zeroinit.py",
+      "new": "analysis/paper/plot_spectrum_15keV_zeroinit.py",
+      "source_sha256": "6f7c719bfb7fc62bb86a7906f4d8e9c78d34bad682616d0563fdba22c23cd16c",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/plot_1p382mV_method_comparison.py",
+      "new": "analysis/samplers/plot_1p382mV_method_comparison.py",
+      "source_sha256": "33348857d4a07790fb2840100ca921aa10339397499c643ea45c1a849d07402c",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/plot_psd_normalized_zeroinit.py",
+      "new": "analysis/samplers/plot_psd_normalized_zeroinit.py",
+      "source_sha256": "0381a1bd5fbf62b385967439ccf5e0ef09ae3171b723cba28400ab3a74075f8b",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/plot_psd_spectrum_comparison.py",
+      "new": "analysis/samplers/plot_psd_spectrum_comparison.py",
+      "source_sha256": "672157b26589fb78b83984decaabf754819118d6706cbe7ff8793158c14940ce",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/explainer_net_inspect.py",
+      "new": "experiments/ddpm_explainer/explainer_net_inspect.py",
+      "source_sha256": "8dd96766a9e5c0c5266ce386253b8a1c5307caae8e2565ddf833329a822ef934",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/explainer_onestep_test.py",
+      "new": "experiments/ddpm_explainer/explainer_onestep_test.py",
+      "source_sha256": "3f81b03589bade0dda8c7b718da8873201e90ea1985eea5c66eb8b447eefa00c",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/explainer_parts.py",
+      "new": "experiments/ddpm_explainer/explainer_parts.py",
+      "source_sha256": "9f228620c23b9d4fdc0bed99c308724229829ca37681a52758987a13e3e460b6",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/explainer_train_watch.py",
+      "new": "experiments/ddpm_explainer/explainer_train_watch.py",
+      "source_sha256": "151b4c14577e0ed6a7653bd79b043ec14d7496748516aeabfcd5e5b164e6baaa",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/explainer_train_watch_plots.py",
+      "new": "experiments/ddpm_explainer/explainer_train_watch_plots.py",
+      "source_sha256": "c8f77f03d0239a7e55adb6f2e88db10535c0fb51bebc56e2aebd98b9f83ed744",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/explainer_trajectory_nonoise.py",
+      "new": "experiments/ddpm_explainer/explainer_trajectory_nonoise.py",
+      "source_sha256": "caff7e4e50c0783ca3339bbcb173ddda6b46b228e229b524fda16fcc619a78dc",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/explainer_trajectory_nonoise_en.py",
+      "new": "experiments/ddpm_explainer/explainer_trajectory_nonoise_en.py",
+      "source_sha256": "89fcfd1635e00ad61208cf0d9bced53d388813d42510853085c1ab73460053e5",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/plot_ddpm_explainer_figs.py",
+      "new": "experiments/ddpm_explainer/plot_ddpm_explainer_figs.py",
+      "source_sha256": "e046cfe82bc3600da06a8d5696b80d9c787532235c57643d57cd67f0cc7aefa8",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/plot_mechanism_slide_figs.py",
+      "new": "experiments/ddpm_explainer/plot_mechanism_slide_figs.py",
+      "source_sha256": "58327ad0b83099080061dbdd79dee9269681d89033ae26f8c205af2f855d86c0",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/plot_validation_dataset_slide.py",
+      "new": "experiments/ddpm_explainer/plot_validation_dataset_slide.py",
+      "source_sha256": "e476e29f418bf69c761ecc4d2c30c105703e60cc911239acc101d4e4eb8472f1",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/test_window_of.py",
+      "new": "tests/test_window_of.py",
+      "source_sha256": "75477e201b750a38e46257cabd9cd7b0a833ff21fc3cc6831951b9282a3f5dd4",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_20260917/fig_knobs.py",
+      "new": "archive/research_20260917/fig_knobs.py",
+      "source_sha256": "5ba206c795589e1b5d2c786f132f1cb8559331d2d502bc8d328677b0df7c7cad",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_20260917/finish_nonoise.sh",
+      "new": "archive/research_20260917/finish_nonoise.sh",
+      "source_sha256": "490fc14e42319df8bbd53b9fd088b6293620694b999abfa820640435596c3daf",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_20260917/knob_sweep.py",
+      "new": "archive/research_20260917/knob_sweep.py",
+      "source_sha256": "317aba5c2d309faafb8a99f9bb719b6e4084a81722a255a0fff372a3c7e4b3ff",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_20260917/mechanism_diagram.py",
+      "new": "archive/research_20260917/mechanism_diagram.py",
+      "source_sha256": "9143e0f9ceb277418b39c5f7889af5bb50b444a0ef459764ce030e2994d9952f",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_20260917/nonoise_2x2.py",
+      "new": "archive/research_20260917/nonoise_2x2.py",
+      "source_sha256": "fd82072009d54fe8f982de089713d7a52661acf4b0e74e6c183535bd2c267e7f",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_20260917/plot_sampler_mechanism.py",
+      "new": "archive/research_20260917/plot_sampler_mechanism.py",
+      "source_sha256": "9a84167c32f62e1b1a59da91ec261010c94ba2d86715ec165f44bf779b8ce2f9",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_20260917/plot_three_samplers_2615.py",
+      "new": "archive/research_20260917/plot_three_samplers_2615.py",
+      "source_sha256": "d53055b5b4c0dfd67a135a262928260e8477e1279beb4c58961b07cbef5507b6",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_20260917/run_nonoise_full.py",
+      "new": "archive/research_20260917/run_nonoise_full.py",
+      "source_sha256": "49b9a2582ccb9d87787da12e4553df051f833f2b31129367a01358022d8b7dab",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_20260917/run_zeroinit_cloud.py",
+      "new": "archive/research_20260917/run_zeroinit_cloud.py",
+      "source_sha256": "29f2d9fd2bb793edf21c2edb202c8e26f80bd3cb6544cbc1a122bcb1951b49b4",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_20260917/steps_and_init_sweep.py",
+      "new": "archive/research_20260917/steps_and_init_sweep.py",
+      "source_sha256": "4c0f9f3a162d8b38f5b811a880cec79358d44babb3613bd02e89ff557df3d827",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_20260917/zeroinit_floor_origin.py",
+      "new": "archive/research_20260917/zeroinit_floor_origin.py",
+      "source_sha256": "bb2ec5fe16fb298a285341174d0943677fb09410447b1dc5508f6e6fac9004a5",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/bessel_res_4way.py",
+      "new": "archive/research_202610/bessel_res_4way.py",
+      "source_sha256": "c367ad9f12e4286e19626fa41a52a15398fbad2f29b564e16e475ec13f7387a3",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/bessel_res_quick.py",
+      "new": "archive/research_202610/bessel_res_quick.py",
+      "source_sha256": "37736b45e15d9ee27b139c8f83939eccdf1daab3c04e1c95dec15f3d03f228fb",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/check_params.py",
+      "new": "archive/research_202610/check_params.py",
+      "source_sha256": "2f90940f0427fccd92d67238b9c0245ec1ac57ab8ac5e3ebc65a2221f7abe1a6",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/ddpm_of_anps_variants.py",
+      "new": "archive/research_202610/ddpm_of_anps_variants.py",
+      "source_sha256": "326b83ab49c20ddd43d2ab989b92f9a747177b6d78ff53efdb86158643db702f",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/ddpm_of_cross_energy.py",
+      "new": "archive/research_202610/ddpm_of_cross_energy.py",
+      "source_sha256": "63a7ac116722a820a41cafeacc8629208432938b777fd4a21fbe779fe68ffbf2",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/ddpm_then_of_meanAP.py",
+      "new": "archive/research_202610/ddpm_then_of_meanAP.py",
+      "source_sha256": "0ff17d1948c4fb2813052cebb14197ad68832cfe6d77a50cdf19c7fa68b643a9",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/ddpm_then_of_oracle.py",
+      "new": "archive/research_202610/ddpm_then_of_oracle.py",
+      "source_sha256": "cdc2126bacfdbd8a78f039669c51c4b67472d303cc5d6f03b0c431fd1e92a72a",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/ddpm_then_of_oracle_old.py",
+      "new": "archive/research_202610/ddpm_then_of_oracle_old.py",
+      "source_sha256": "c026f1174fdb70a7700cf331736a397bde56202b818140f99cc307fbb2133033",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/edit_slides.py",
+      "new": "archive/research_202610/edit_slides.py",
+      "source_sha256": "7d90d6565c094112861cbc9d817770332353fc23ada25b24b71c6304b790321f",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/explain_figs.py",
+      "new": "archive/research_202610/explain_figs.py",
+      "source_sha256": "2ea31156c3bdb13e3af129076c55026b6fe2308392a05d5f71758690cc060af1",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/finish_nonoise.sh",
+      "new": "archive/research_20260917/finish_nonoise.sh",
+      "source_sha256": "490fc14e42319df8bbd53b9fd088b6293620694b999abfa820640435596c3daf",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/hf_check.py",
+      "new": "archive/research_202610/hf_check.py",
+      "source_sha256": "92b4059e5cc6cedf9fe635e8a6bac03a67376647e5c715c8c13a6905c012b942",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/linearity.json",
+      "new": "archive/research_202610/linearity.json",
+      "source_sha256": "d8717281d0385ec2257616ca6bd92efd6f93ac530b5699e6b381bc60c0caaf4b",
+      "compatibility_entry": false
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/linearity.py",
+      "new": "archive/research_202610/linearity.py",
+      "source_sha256": "832456a0c8c99bd3c01947d621de56ee5e290638a0074ef7ead613feaba85293",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/mech_figs.py",
+      "new": "archive/research_202610/mech_figs.py",
+      "source_sha256": "523942a3ddb163ee29cf39d3baa552be33d6bfc1827594c84358ab428cab5a52",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/net_inspect.py",
+      "new": "archive/research_202610/net_inspect.py",
+      "source_sha256": "589565d0ca24233bd9f3f5252521cc07bb8c182d5a2f8b1738d730e4a9c45118",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/nonoise_2x2.json",
+      "new": "archive/research_202610/nonoise_2x2.json",
+      "source_sha256": "ac3777af297471110dc5ded147ec612a8fd78587540c4017d8faf06388acd180",
+      "compatibility_entry": false
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/nonoise_2x2.py",
+      "new": "archive/research_20260917/nonoise_2x2.py",
+      "source_sha256": "fd82072009d54fe8f982de089713d7a52661acf4b0e74e6c183535bd2c267e7f",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/of_check.py",
+      "new": "archive/research_202610/of_check.py",
+      "source_sha256": "ba64f27172dd50dafa60c857960dd0539e43d8013ccb70cd0e1a737e4013c5b3",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/of_check2.py",
+      "new": "archive/research_202610/of_check2.py",
+      "source_sha256": "5ad26f190f9b11634520b7eb3b8f06dc1d607c2cbfc25d874f2f05582b84bd67",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/plot_meanAP_residual.py",
+      "new": "archive/research_202610/plot_meanAP_residual.py",
+      "source_sha256": "6bb9c3085e2a69ed5296c42c4c15d415cbd5251134b1a7bf12b8a221b953e962",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/plot_meanAP_residual_big.py",
+      "new": "archive/research_202610/plot_meanAP_residual_big.py",
+      "source_sha256": "e3749682a328e7acf8ad9b4949c52b4964c4dbc6562cd787181d22699757b17e",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/plot_sampler_mechanism.py",
+      "new": "archive/research_20260917/plot_sampler_mechanism.py",
+      "source_sha256": "9a84167c32f62e1b1a59da91ec261010c94ba2d86715ec165f44bf779b8ce2f9",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/plot_three_samplers_2615.py",
+      "new": "archive/research_20260917/plot_three_samplers_2615.py",
+      "source_sha256": "d53055b5b4c0dfd67a135a262928260e8477e1279beb4c58961b07cbef5507b6",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/probe.json",
+      "new": "archive/research_202610/probe.json",
+      "source_sha256": "1372c99592cc9ed73431cd08229478540327e60822773aafc16b410c54a30892",
+      "compatibility_entry": false
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/res_vs_E.py",
+      "new": "archive/research_202610/res_vs_E.py",
+      "source_sha256": "d1a92440e272b5034456e70d00a58a3f9a8c0c2a09256c5e683f2aa4a0da7e83",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/run_nonoise_full.py",
+      "new": "archive/research_20260917/run_nonoise_full.py",
+      "source_sha256": "49b9a2582ccb9d87787da12e4553df051f833f2b31129367a01358022d8b7dab",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/short_window_anps.py",
+      "new": "archive/research_202610/short_window_anps.py",
+      "source_sha256": "12bb69399ee32624763f7edb75a7ad86a78e93fb1f50bb5a4b9ea99155fb8f4f",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/short_window_anps2.py",
+      "new": "archive/research_202610/short_window_anps2.py",
+      "source_sha256": "a97df3a689536fe903fa456c6a27b4a20c4b31d0c16ad56afde3aff51a88aebd",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/train_watch.py",
+      "new": "archive/research_202610/train_watch.py",
+      "source_sha256": "c07584470be938f09b833f372768c5221cf6fde7739e3724238bcbff03eff65d",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/_archive_scratch_202610/train_watch_plots.py",
+      "new": "archive/research_202610/train_watch_plots.py",
+      "source_sha256": "3a6192f8def79381c0218da1feb74328a4e3a25ab1557764d30e7409ad1fe523",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/build_ddpm_stream.py",
+      "new": "experiments/of_comparison/build_ddpm_stream.py",
+      "source_sha256": "2c1a2d2185814803b4a1a42f1ee73acb39a42f2b9efc7091c04f5986e52612ad",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/cut_ddpm_windows.py",
+      "new": "experiments/of_comparison/cut_ddpm_windows.py",
+      "source_sha256": "1cbda6cb0451756f79c5b96a02e04f62efee2d5882b936eca7e5c78605d9cbaf",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/generate_of_stream.py",
+      "new": "experiments/of_comparison/generate_of_stream.py",
+      "source_sha256": "6bd23dfc27d5c9930abe7a37811cedc115b8396c5c5dd4b7c4f359b335a204fd",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/octopus_local/analyze_ddpm_of.py",
+      "new": "experiments/of_comparison/octopus_local/analyze_ddpm_of.py",
+      "source_sha256": "81a4f2a6e6e035796530f90e82ce839716c89d2f63500ab9f64df25be36189e6",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/octopus_local/analyze_local_of.py",
+      "new": "experiments/of_comparison/octopus_local/analyze_local_of.py",
+      "source_sha256": "3dcb37b33802688911346459442fa5e7631eff7522eb6e43b76b5ac23d96faff",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/octopus_local/export_of_table.py",
+      "new": "experiments/of_comparison/octopus_local/export_of_table.py",
+      "source_sha256": "4417035568de43b995189de5e61da43b7c0d6a3d84d4d03de53289e41d31a92e",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/octopus_local/make_trigger_file.py",
+      "new": "experiments/of_comparison/octopus_local/make_trigger_file.py",
+      "source_sha256": "97a366f9b5c74130bf8e244f9c1fd9f0e32fe64167ebaabad803db452cde82d9",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/octopus_local/reco.toml.in",
+      "new": "experiments/of_comparison/octopus_local/reco.toml.in",
+      "source_sha256": "f862efdb3eb5a4a4302b7fadf73f737b352739583b1ed9d0574c2707b409b61d",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/octopus_local/run_ddpm_of_chain.sh",
+      "new": "experiments/of_comparison/octopus_local/run_ddpm_of_chain.sh",
+      "source_sha256": "63eba0866f38658878f0a41bee045291a96ac7479608f645db5d38896ca7841a",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/octopus_local/run_full_of_chain.sh",
+      "new": "experiments/of_comparison/octopus_local/run_full_of_chain.sh",
+      "source_sha256": "6c3d58992ea5cd361b8fb24e0974928fd3e30814e20e2fd033c4e74a7ff388ef",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/octopus_local/run_local_of.sh",
+      "new": "experiments/of_comparison/octopus_local/run_local_of.sh",
+      "source_sha256": "8f99ebfe8961e6c4012fd8a2ecf4e1e117767cf263ef822712ece32bf1d59147",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/plot_full_of_vs_ddpm.py",
+      "new": "experiments/of_comparison/plot_full_of_vs_ddpm.py",
+      "source_sha256": "2d529ebc205aff2539ade006e4c04718cd3ede0e2b25b8f9720edf6f38b46aed",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/plot_of_stream_overview.py",
+      "new": "experiments/of_comparison/plot_of_stream_overview.py",
+      "source_sha256": "03ea700677313e5e5a3075e6ca9de8cc757356c090a20aa4983abcce14cf8e57",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/plot_of_vs_ddpm_15keV.py",
+      "new": "experiments/of_comparison/plot_of_vs_ddpm_15keV.py",
+      "source_sha256": "9362f569c2c0f878b65f2850106054f1c5dc28ab22e4926a3d5e88ee4b878dfd",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/plot_pilot_spectra.py",
+      "new": "experiments/of_comparison/plot_pilot_spectra.py",
+      "source_sha256": "60689aca78c361ca538d6d6f11817e7a47878710c0fd71287957c7c92b87125b",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/plot_pilot_spectra_ddpm_of.py",
+      "new": "experiments/of_comparison/plot_pilot_spectra_ddpm_of.py",
+      "source_sha256": "2ca34d3168dbfd68a3891dca6c338842f8943f6d530385aef921675af3acaeea",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/run_ddpm_pilot.py",
+      "new": "experiments/of_comparison/run_ddpm_pilot.py",
+      "source_sha256": "143916cb96291512b00c159b23d796a7db4b35b210f848bc9d568fd459db9801",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/run_ddpm_pilot_chain.sh",
+      "new": "experiments/of_comparison/run_ddpm_pilot_chain.sh",
+      "source_sha256": "f7533f4fff87c77d798a56925f790037dd4b1036be2a3f56d2fa9fb418551fec",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/validate_stream_noise.py",
+      "new": "experiments/of_comparison/validate_stream_noise.py",
+      "source_sha256": "eb223f3b916d050e1c7ca66894324730b75b4a5a054a26e0b0b11b4378211eb3",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/verify_of_stream.py",
+      "new": "experiments/of_comparison/verify_of_stream.py",
+      "source_sha256": "c16ad307c332038e12e06b285c1105daa1307d816058c9fd702768bdb83d7c9a",
+      "compatibility_entry": true
+    },
+    {
+      "old": "scripts/of_compare/write_delivery_summary.py",
+      "new": "experiments/of_comparison/write_delivery_summary.py",
+      "source_sha256": "6037fe2ec0e75dd62efdf90c35de744691d35ced62aff10266b9c2555ca78251",
+      "compatibility_entry": true
+    },
+    {
+      "old": "experiments/20261107_train_clean/legacy_snapshot/fit_train_clean.py",
+      "new": "experiments/train_clean_20261107/fit_train_clean.py",
+      "source_sha256": "c5dc65842f505733a2ee5ab2db00bddd7fd44d662df971cf3eca2d94ef154169",
+      "compatibility_entry": false
+    },
+    {
+      "old": "experiments/20261107_train_clean/legacy_snapshot/launch_background.py",
+      "new": "experiments/train_clean_20261107/launch_background.py",
+      "source_sha256": "f954b8ef2d7ed346657e0cdc2de47e4508d064dd7e55bf57be47c022aa8af95f",
+      "compatibility_entry": false
+    },
+    {
+      "old": "experiments/20261107_train_clean/legacy_snapshot/plot_3d_tbase_aec.py",
+      "new": "analysis/train_clean/plot_3d_tbase_aec.py",
+      "source_sha256": "7512d3476bcb37d9e5c6d2b50fa079a8b97854d7904f86e256afbfa4eab7801b",
+      "compatibility_entry": false
+    },
+    {
+      "old": "experiments/20261107_train_clean/legacy_snapshot/plot_after_fit.py",
+      "new": "analysis/train_clean/plot_after_fit.py",
+      "source_sha256": "efe4f07b5c84bf0beabf053c154e45b37a31e99708990c4d925b89d3d104e9f1",
+      "compatibility_entry": false
+    },
+    {
+      "old": "experiments/20261107_train_clean/legacy_snapshot/plot_blue_only.py",
+      "new": "analysis/train_clean/plot_blue_only.py",
+      "source_sha256": "98b94e7397e0eb73619d27fd37f1a950692c506f43bd7b003689e168e97e7cb0",
+      "compatibility_entry": false
+    },
+    {
+      "old": "experiments/20261107_train_clean/legacy_snapshot/plot_tau_energy.py",
+      "new": "analysis/train_clean/plot_tau_energy.py",
+      "source_sha256": "a53880759dc844276d7bbf65a3fc5ba35c7959cf5733721e3762b81512c1a6d4",
+      "compatibility_entry": false
+    }
+  ],
+  "untracked_bytecode": [
+    "scripts/__pycache__/generate_noise_shards.cpython-310.pyc",
+    "scripts/__pycache__/plot_trajectory_paper.cpython-310.pyc",
+    "src/basics/__pycache__/__init__.cpython-310.pyc",
+    "src/ddpm/__pycache__/__init__.cpython-310.pyc",
+    "src/ddpm/__pycache__/preprocess_index.cpython-310.pyc",
+    "src/flowMatching/__pycache__/__init__.cpython-310.pyc",
+    "src/flowMatching/__pycache__/flow_matching.cpython-310.pyc",
+    "src/flowMatching/__pycache__/unet.cpython-310.pyc",
+    "src/flowMatching/__pycache__/unet_cond.cpython-310.pyc",
+    "src/noise/__pycache__/__init__.cpython-310.pyc",
+    "src/noise/__pycache__/qa_noise.cpython-310.pyc",
+    "src/pulse/__pycache__/__init__.cpython-310.pyc",
+    "src/pulse/__pycache__/generate.cpython-310.pyc",
+    "src/pulse/__pycache__/qa_pulse.cpython-310.pyc",
+    "src/pulse/__pycache__/qa_spectrum.cpython-310.pyc",
+    "src/pulse/__pycache__/spectrum.cpython-310.pyc"
+  ]
+}

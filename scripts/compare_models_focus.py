@@ -22,7 +22,7 @@ from src.ddpm.schedule import DiffusionSchedule
 from src.ddpm.unet import UNet1D
 from src.ddpm.diffusion import GaussianDiffusion
 from src.ddpm.dataset import PulseNoiseDataset
-from src.basics.fit import fit_pulse, triexp_double
+from src.basics.fit import fit_pulse
 
 
 def load_model(model_path, T, device):
@@ -104,14 +104,14 @@ def main():
             ax = axes[row, col]
             ax.plot(t, sig * 1e3, 'k-', lw=0.5, alpha=0.8, label='data')
             fr = fits[name]
-            ax.plot(t, triexp_double(t, *fr.params) * 1e3, 'tab:blue', lw=1.0,
-                    label='fit')
-            ax.set_title(
-                f"{name}  (idx={idx}, scale={scale*1e3:.1f} mV)\n"
-                f"chi2/ndf={fr.chi2_per_ndf:.2e}  "
-                f"tau_r={fr.tau_r[0]*1e3:.1f} ms  "
-                f"tau_d1={fr.tau_d[0]*1e3:.0f} ms",
-                fontsize=9)
+            if fr.success and fr.model_fn is not None:
+                ax.plot(t, fr.model_fn(t, *fr.params) * 1e3, 'tab:blue', lw=1.0, label='fit')
+                detail = (f"chi2/ndf={fr.chi2_per_ndf:.2e}  "
+                          f"tau_r={fr.tau_r[0]*1e3:.1f} ms  "
+                          f"tau_d1={fr.tau_d[0]*1e3:.0f} ms")
+            else:
+                detail = 'Fit failed'
+            ax.set_title(f"{name}  (idx={idx}, scale={scale*1e3:.1f} mV)\n{detail}", fontsize=9)
             ax.set_xlabel('Time [s]')
             ax.set_ylabel('mV')
             ax.legend(loc='upper right', fontsize=8)

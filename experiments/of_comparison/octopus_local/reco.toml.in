@@ -1,0 +1,125 @@
+# Octopus (octoreflow_gio) reconstruct config for the local OF test.
+# Placeholders @RUN@ @PREFIX@ @TRIGDIR@ @RECODIR@ @APMIN@ @APMAX@ @APNORM@ @TSTEP@ @TRANGE@ are filled by run_local_of.sh.
+# One pass: ANPS from the noise windows, average pulse (AP) from the events inside the amplitude window,
+# then the optimum filter on every window with exactly one trigger.
+# No windowing and no pole-zero correction: OF is linear, so AP, ANPS and events only need the same treatment.
+
+[directories]
+    rawdir       = "/data/raw/"
+    triggerdir   = "/out/@TRIGDIR@/"
+    processeddir = "/out/@RECODIR@/"
+
+[runConfig]
+    filenamePrefix = ["@PREFIX@"]
+    runNumber      = ["@RUN@"]
+
+[settings]
+    rawType   = "Cupid"
+    runType   = "reconstruct"
+    draw      = false
+    verbosity = 3
+    overwrite = true
+
+[channels.heat]
+    list         = [1]
+    waveformtype = "continuous"
+
+[module.module.heat]
+    windowlength = [10.0]
+    pretrigger   = [1.5]
+    Draw = false
+
+[module.timestamp]
+    Draw = false
+
+[module.numberoftriggers.heat]
+    Draw = false
+
+[module.baseline.heat]
+    StartTime = [0.0]
+    StopTime  = [1.4]
+    Draw = false
+
+[module.baselineslope.heat]
+    StartTime = [0.0]
+    StopTime  = [1.4]
+    Draw = false
+
+[module.maxminusbaseline.heat]
+    SearchWindow = [0.5]
+    Draw = false
+
+# triggerdelay is required by fouriertransform (CorrectDelay stays false)
+[module.triggerdelay.heat]
+    Draw = false
+
+### ANPS: noise windows ###
+[module.baselinesubtraction.heat.noise]
+    OutputWaveform = "baselinesubtracted"
+    Select = [ ["module","module","isnoise",true],
+               ["module","numberoftriggers","numberoftriggers",1] ]
+    RunOnlyOnGoodEvents = true
+    Draw = false
+
+[module.fouriertransform.heat.noise]
+    InputWaveform  = "baselinesubtracted"
+    OutputWaveform = "fft"
+    Windowing = "none"
+    Select = [ ["module","module","isnoise",true],
+               ["module","numberoftriggers","numberoftriggers",1] ]
+    RunOnlyOnGoodEvents = true
+    Draw = false
+
+[module.averagepowerspectrum.heat.anps]
+    InputWaveform = "fft"
+    Select = [ ["module","module","isnoise",true],
+               ["module","numberoftriggers","numberoftriggers",1] ]
+    RunOnlyOnGoodEvents = true
+    Draw = false
+
+### AP: events inside the amplitude window [@APMIN@, @APMAX@] V ###
+[module.baselinesubtraction.heat.ap]
+    OutputWaveform = "baselinesubtracted"
+    Select = [ ["module","module","issignal",true],
+               ["module","numberoftriggers","numberoftriggers",1] ]
+    CutOutside = [ ["module","maxminusbaseline","amplitude",[@APMIN@],[@APMAX@]] ]
+    RunOnlyOnGoodEvents = true
+    Draw = false
+
+[module.averagepulse.heat.ap]
+    InputWaveform = "baselinesubtracted"
+    Normalize = @APNORM@
+    PulseMin = [-0.5]
+    PulseMax = [5.0]
+    Select = [ ["module","module","issignal",true],
+               ["module","numberoftriggers","numberoftriggers",1] ]
+    CutOutside = [ ["module","maxminusbaseline","amplitude",[@APMIN@],[@APMAX@]] ]
+    RunOnlyOnGoodEvents = true
+    Draw = false
+
+### OF: all single-trigger windows (signal and noise) ###
+[module.baselinesubtraction.heat.all]
+    OutputWaveform = "baselinesubtracted"
+    Select = [ ["module","numberoftriggers","numberoftriggers",1] ]
+    RunOnlyOnGoodEvents = true
+    Draw = false
+
+[module.fouriertransform.heat.all]
+    InputWaveform  = "baselinesubtracted"
+    OutputWaveform = "fft"
+    Windowing = "none"
+    Select = [ ["module","numberoftriggers","numberoftriggers",1] ]
+    RunOnlyOnGoodEvents = true
+    Draw = false
+
+[module.optimumfilter.heat]
+    InputWaveform  = "fft"
+    OutputWaveform = "OFFiltered"
+    ANPS = "averagepowerspectrum_heat_anps_power"
+    AP   = "averagepulse_heat_ap_AP"
+    Windowing = "none"
+    TimeStep  = @TSTEP@
+    TimeRange = @TRANGE@
+    Select = [ ["module","numberoftriggers","numberoftriggers",1] ]
+    RunOnlyOnGoodEvents = true
+    Draw = false

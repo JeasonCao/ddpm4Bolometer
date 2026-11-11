@@ -21,7 +21,7 @@ Output H5 layout
                                tri-exp shape parameters for --model triexp data
     /clean/equilibrium/...   — equilibrium state per pulse (ODE data only)
     /tau_r_1, /tau_d1_1, ... — per-pulse time constants (tri-exp data only)
-    /noise/mix/{alpha,beta,r,scale}  — per-window mix metadata
+    /noise/mix/{alpha,beta,r,scale}  — per-window mix metadata (paired noise only)
     /noise/params/...        — noise component params (target_rms, alpha-color, ...)
 
 Attributes
@@ -83,7 +83,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--clean_h5', required=True)
     p.add_argument('--noise_h5', required=True,
-                   help='noise_total h5 (must contain /mix/ group)')
+                   help='Legacy noise shard or paired noise_total HDF5')
     p.add_argument('--model_path', required=True)
     p.add_argument('--output', required=True)
     p.add_argument('--T', type=int, default=50)
@@ -190,10 +190,11 @@ def main():
 
             # Copy noise mix + noise params (sliced to n_pair)
             noise_grp = out.create_group('noise')
-            mix_grp = noise_grp.create_group('mix')
-            for k in nf['mix']:
-                mix_grp.create_dataset(k, data=nf[f'mix/{k}'][:n_pair],
-                                       compression='gzip')
+            if 'mix' in nf:
+                mix_grp = noise_grp.create_group('mix')
+                for k in nf['mix']:
+                    mix_grp.create_dataset(k, data=nf[f'mix/{k}'][:n_pair],
+                                           compression='gzip')
             np_grp = noise_grp.create_group('params')
             for k in nf['params']:
                 np_grp.create_dataset(k, data=nf[f'params/{k}'][:n_pair],

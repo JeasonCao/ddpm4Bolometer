@@ -66,6 +66,8 @@ def per_window_metrics(clean_V, noisy_V, den_V, scale, n_peaks):
             m['peaks'] = []
             m['chi2_per_ndf'] = fr.chi2_per_ndf
             m['fit_success'] = fr.success
+            if not (fit_clean.success and fr.success):
+                continue
             c_amp = fit_clean.peak_amps[0]
             s_amp = fr.peak_amps[0]
             c_pos_s = fit_clean.peak_times[0]

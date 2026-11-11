@@ -1,6 +1,6 @@
 """
-Generate paired noise windows: periodic-only, white-only, and total
-(combined with random energy mix and overall scale).
+Generate legacy single-file noise shards by default, or paired noise shards.
+The paired mode saves periodic-only, white-only, and total waveforms.
 
 Output layout
 -------------
@@ -13,8 +13,8 @@ Per-window indexing is matched across the three folders: window i of
 shard NNN in noise_periodic and the same in noise_white combine, with
 that window's metadata, into the same window of noise_total.
 
-Two modes:
-  * Flat (default): noise parameters are resampled *per window*; each shard
+Paired output has two layouts:
+  * Flat: noise parameters are resampled *per window*; each shard
     is just a chunk of i.i.d. windows.
   * Channel bank (``--n_channels``): noise parameters are sampled *once per
     shard* (= per channel) and held fixed for all its windows, so each shard
@@ -25,8 +25,11 @@ Two modes:
     clean_NNN.h5 from src.pulse.generate --n_channels.
 
 Usage:
-    # Flat noise
-    python -u scripts/generate_noise_shards.py --n_shards 10 --windows_per_shard 10000
+    # Legacy noise (default)
+    python -u scripts/generate_noise_shards.py --output_dir /path/to/noise
+
+    # Paired flat noise
+    python -u scripts/generate_noise_shards.py --mode paired --output_dir /path/to/paired
 
     # Channel bank: 100 channels x 200 windows each
     python -u scripts/generate_noise_shards.py --n_channels 100 \
@@ -45,8 +48,10 @@ import h5py
 import numpy as np
 
 from src.noise.generator import (
+    generate_noise,
     generate_paired_noise,
     sample_noise_params,
+    sample_paired_noise_params,
 )
 
 DURATION = 10.0
@@ -104,7 +109,9 @@ def _write_shard(path, waveforms, params_dict, mix_meta=None, *, seed,
 def generate_noise_shard(n_windows, periodic_path, white_path, total_path,
                          seed, channel_id=None, fixed_params=None,
                          fixed_r=None, fixed_scale=None):
-    """Generate one noise shard.
+    """Generate one legacy or paired noise shard.
+
+    With periodic_path=None, write only the legacy total_path file.
 
     If ``fixed_params`` is given, those noise parameters are used for every
     window (channel-bank mode); otherwise parameters are resampled per window
@@ -116,9 +123,11 @@ def generate_noise_shard(n_windows, periodic_path, white_path, total_path,
     rng = np.random.default_rng(seed)
     n_samples = int(DURATION * F_SAMPLE)
 
-    wave_periodic = np.zeros((n_windows, n_samples), dtype=np.float64)
-    wave_white = np.zeros((n_windows, n_samples), dtype=np.float64)
+    paired = periodic_path is not None
     wave_total = np.zeros((n_windows, n_samples), dtype=np.float64)
+    if paired:
+        wave_periodic = np.zeros_like(wave_total)
+        wave_white = np.zeros_like(wave_total)
 
     # Per-window scalar params (in channel mode these are constant per shard,
     # but we still log them per window so the file format is identical).
@@ -131,22 +140,31 @@ def generate_noise_shard(n_windows, periodic_path, white_path, total_path,
     par_envelope_var = np.zeros(n_windows)
     par_n_resonances = np.zeros(n_windows, dtype=int)
 
-    # Mix metadata (only stored on noise_total)
-    mix_alpha = np.zeros(n_windows)
-    mix_beta = np.zeros(n_windows)
-    mix_r = np.zeros(n_windows)
-    mix_scale = np.zeros(n_windows)
+    if paired:
+        mix_alpha = np.zeros(n_windows)
+        mix_beta = np.zeros(n_windows)
+        mix_r = np.zeros(n_windows)
+        mix_scale = np.zeros(n_windows)
 
     t_start = time.time()
+
     for i in range(n_windows):
-        params = fixed_params if fixed_params is not None else sample_noise_params(rng)
-        periodic, white, total, meta = generate_paired_noise(
-            rng, params, duration=DURATION, f_sample=F_SAMPLE,
-            r=fixed_r, scale=fixed_scale,
-        )
-        wave_periodic[i] = periodic
-        wave_white[i] = white
-        wave_total[i] = total
+        if paired:
+            params = fixed_params if fixed_params is not None else sample_paired_noise_params(rng)
+            periodic, white, total, meta = generate_paired_noise(
+                rng, params, duration=DURATION, f_sample=F_SAMPLE,
+                r=fixed_r, scale=fixed_scale,
+            )
+            wave_periodic[i] = periodic
+            wave_white[i] = white
+            wave_total[i] = total
+            mix_alpha[i] = meta['alpha']
+            mix_beta[i] = meta['beta']
+            mix_r[i] = meta['r']
+            mix_scale[i] = meta['scale']
+        else:
+            params = sample_noise_params(rng)
+            wave_total[i] = generate_noise(rng, params, duration=DURATION, f_sample=F_SAMPLE)
 
         par_target_rms[i] = params['target_rms']
         par_alpha_color[i] = params['alpha']
@@ -156,11 +174,6 @@ def generate_noise_shard(n_windows, periodic_path, white_path, total_path,
         par_white_rms[i] = params['white_rms']
         par_envelope_var[i] = params['envelope_variation']
         par_n_resonances[i] = len(params['resonances'])
-
-        mix_alpha[i] = meta['alpha']
-        mix_beta[i] = meta['beta']
-        mix_r[i] = meta['r']
-        mix_scale[i] = meta['scale']
 
         if (i + 1) % 100 == 0 or i == 0:
             elapsed = time.time() - t_start
@@ -180,25 +193,18 @@ def generate_noise_shard(n_windows, periodic_path, white_path, total_path,
         'envelope_variation': par_envelope_var,
         'n_resonances': par_n_resonances,
     }
-    mix_meta = {
-        'alpha': mix_alpha,
-        'beta': mix_beta,
-        'r': mix_r,
-        'scale': mix_scale,
-    }
-
-    kw = dict(seed=seed, channel_id=channel_id, fixed_params=fixed_params,
-              fixed_r=fixed_r, fixed_scale=fixed_scale)
-    print(f"Saving periodic → {periodic_path}")
-    _write_shard(periodic_path, wave_periodic, params_dict, **kw)
-    print(f"Saving white    → {white_path}")
-    _write_shard(white_path, wave_white, params_dict, **kw)
-    print(f"Saving total    → {total_path}")
-    _write_shard(total_path, wave_total, params_dict, mix_meta=mix_meta, **kw)
+    if paired:
+        mix_meta = {'alpha': mix_alpha, 'beta': mix_beta, 'r': mix_r, 'scale': mix_scale}
+        kw = dict(seed=seed, channel_id=channel_id, fixed_params=fixed_params,
+                  fixed_r=fixed_r, fixed_scale=fixed_scale)
+        _write_shard(periodic_path, wave_periodic, params_dict, **kw)
+        _write_shard(white_path, wave_white, params_dict, **kw)
+        _write_shard(total_path, wave_total, params_dict, mix_meta=mix_meta, **kw)
+    else:
+        _write_shard(total_path, wave_total, params_dict, seed=seed)
 
     elapsed = time.time() - t_start
-    print(f"Done. {n_windows} paired windows in {elapsed:.1f}s "
-          f"({n_windows/elapsed:.1f} windows/s)")
+    print(f"Saved {n_windows} windows to {total_path} in {elapsed:.1f}s")
 
 
 def _shard_paths(periodic_dir, white_dir, total_dir, idx):
@@ -208,23 +214,31 @@ def _shard_paths(periodic_dir, white_dir, total_dir, idx):
             os.path.join(total_dir, fname))
 
 
-def run_flat(args, periodic_dir, white_dir, total_dir):
+def run_flat(args, output_dir, paired):
     for shard in range(args.n_shards):
-        periodic_path, white_path, total_path = _shard_paths(
-            periodic_dir, white_dir, total_dir, shard)
-        if all(os.path.exists(p) for p in (periodic_path, white_path, total_path)):
+        if paired:
+            periodic_path, white_path, total_path = _shard_paths(
+                *paired_output_dirs(output_dir, args.split), shard,
+            )
+            paths = (periodic_path, white_path, total_path)
+        else:
+            total_path = os.path.join(output_dir, args.split, f'noise_{shard:03d}.h5')
+            periodic_path, white_path = None, None
+            paths = (total_path,)
+        if all(os.path.exists(path) for path in paths):
             print(f"Shard {shard} already complete, skipping.")
             continue
-
         seed = args.base_seed + shard * 1000
-        print(f"\n{'='*60}")
-        print(f"Generating shard {shard}/{args.n_shards}  "
-              f"(windows: {args.windows_per_shard}, seed: {seed})")
-        print(f"{'='*60}")
+        print(f"Generating shard {shard}/{args.n_shards} (windows: {args.windows_per_shard}, seed: {seed})")
         generate_noise_shard(args.windows_per_shard,
                              periodic_path, white_path, total_path, seed=seed)
 
     print(f"\nAll {args.n_shards} shards complete.")
+
+
+def paired_output_dirs(output_dir, split):
+    return tuple(os.path.join(output_dir, name, split)
+                 for name in ('noise_periodic', 'noise_white', 'noise_total'))
 
 
 def run_channel_bank(args, periodic_dir, white_dir, total_dir):
@@ -240,7 +254,7 @@ def run_channel_bank(args, periodic_dir, white_dir, total_dir):
         # Independent stream per channel; the noise-param draw is fixed here,
         # along with the mix balance r and overall scale (channel identity).
         param_rng = np.random.default_rng(child_seqs[c])
-        fixed_params = sample_noise_params(param_rng)
+        fixed_params = sample_paired_noise_params(param_rng)
         fixed_r = float(param_rng.uniform(0.0, 1.0))
         fixed_scale = float(param_rng.uniform(0.5, 2.0))
         seed = int(child_seqs[c].generate_state(1)[0])
@@ -259,14 +273,13 @@ def run_channel_bank(args, periodic_dir, white_dir, total_dir):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Generate paired noise shards")
+    parser = argparse.ArgumentParser(description="Generate noise shards")
+    parser.add_argument('--mode', choices=('legacy', 'paired'),
+                        help='Legacy single-file shards by default; paired generates three noise families')
     parser.add_argument('--output_dir', type=str,
-                        default='/media/Disk_YIN/yunshancheng/cuore/noise_v2',
-                        help='Root dir; will contain noise_periodic/, noise_white/, noise_total/ '
-                             '(or split= prefixes)')
+                        help='Output root; paired mode creates noise_periodic, noise_white and noise_total')
     parser.add_argument('--split', type=str, default='',
-                        help='Optional subdir under each of {periodic,white,total} '
-                             '(e.g. "test"); default writes directly to noise_*/')
+                        help='Optional output subdirectory, e.g. test')
     # Channel-bank mode
     parser.add_argument('--n_channels', type=int, default=None,
                         help='If set, generate a channel bank: one shard per '
@@ -279,14 +292,20 @@ if __name__ == '__main__':
     parser.add_argument('--base_seed', type=int, default=7777)
     args = parser.parse_args()
 
-    periodic_dir = os.path.join(args.output_dir, 'noise_periodic', args.split)
-    white_dir = os.path.join(args.output_dir, 'noise_white', args.split)
-    total_dir = os.path.join(args.output_dir, 'noise_total', args.split)
+    # The existing --n_channels option explicitly requests a paired channel bank.
+    paired = args.mode == 'paired' or (args.mode is None and args.n_channels is not None)
+    if args.n_channels is not None and not paired:
+        parser.error('--n_channels requires paired mode')
+    output_dir = args.output_dir
+    if output_dir is None:
+        output_dir = ('/media/Disk_YIN/yunshancheng/cuore/noise_v2' if paired
+                      else '/mnt/d/storage/research/DDPM4bolometer/simu_data/noise')
 
-    for d in (periodic_dir, white_dir, total_dir):
-        os.makedirs(d, exist_ok=True)
+    output_dirs = paired_output_dirs(output_dir, args.split) if paired else (os.path.join(output_dir, args.split),)
+    for directory in output_dirs:
+        os.makedirs(directory, exist_ok=True)
 
     if args.n_channels is not None:
-        run_channel_bank(args, periodic_dir, white_dir, total_dir)
+        run_channel_bank(args, *output_dirs)
     else:
-        run_flat(args, periodic_dir, white_dir, total_dir)
+        run_flat(args, output_dir, paired)

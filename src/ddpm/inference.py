@@ -601,6 +601,8 @@ def main():
             m['peaks'] = []
             m['chi2_per_ndf'] = fr.chi2_per_ndf
             m['fit_success'] = fr.success
+            if not (fit_clean.success and fr.success):
+                continue
             for i in range(n_peaks):
                 c_amp = fit_clean.peak_amps[i]
                 c_pos_s = fit_clean.peak_times[i]
@@ -680,8 +682,8 @@ def main():
                 count += 1
                 total_t_err += abs(pk['time_err_ms'])
                 t_count += 1
-        avg[label]['amp_abs_err_pct'] = total_err / max(count, 1)
-        avg[label]['time_abs_err_ms'] = total_t_err / max(t_count, 1)
+        avg[label]['amp_abs_err_pct'] = total_err / count if count else float('nan')
+        avg[label]['time_abs_err_ms'] = total_t_err / t_count if t_count else float('nan')
     for label in ['noisy', 'single', 'multi']:
         for key in all_keys:
             avg[label][key] /= n
@@ -790,7 +792,9 @@ def main():
             f"{'J_asd':>12}  {mn['jasd']:10.4f}  {ms['jasd']:10.4f}  {mm['jasd']:10.4f}",
         ]
         # Peak amplitude and timing rows
-        n_pk = len(mn['peaks'])
+        n_pk = min(len(m['peaks']) for m in (mn, ms, mm))
+        if n_pk == 0:
+            lines.append('Peak comparison unavailable (fit failed)')
         for i in range(n_pk):
             pk_label = f"Pk{i+1}" if n_pk > 1 else "Pk"
             c_amp = mn['peaks'][i]['clean_amp']

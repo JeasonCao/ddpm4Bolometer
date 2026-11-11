@@ -85,6 +85,9 @@ def _window_metrics(args):
         fr = fit_pulse(sig, n_peaks)
         m['chi2_per_ndf'] = fr.chi2_per_ndf
         m['peaks'] = []
+        out[label] = m
+        if not (fit_clean.success and fr.success):
+            continue
         for i in range(n_peaks):
             c_amp = fit_clean.peak_amps[i]
             m['peaks'].append({
@@ -93,7 +96,6 @@ def _window_metrics(args):
                 'time_err_ms': (fr.peak_times[i]
                                 - fit_clean.peak_times[i]) * 1000.0,
             })
-        out[label] = m
     return out
 
 
@@ -125,7 +127,7 @@ def metric_values(results, src, mdef):
                 vals.append(abs(v))
                 pidx.append(i)
                 widx.append(w)
-        return np.array(vals), np.array(pidx), np.array(widx)
+        return np.array(vals), np.array(pidx, dtype=int), np.array(widx, dtype=int)
     vals = np.array([r[src][key] for r in results], dtype=np.float64)
     if tf is not None:
         vals = tf(vals)

@@ -16,9 +16,9 @@ draws (so they are paired):
             (energy-preserving mix) and scale ~ U(0.5, 2.0).
 
 Usage:
-    from src.noise.generator import generate_paired_noise, sample_noise_params
+    from src.noise.generator import generate_paired_noise, sample_paired_noise_params
     rng = np.random.default_rng(42)
-    params = sample_noise_params(rng)
+    params = sample_paired_noise_params(rng)
     periodic, white, total, meta = generate_paired_noise(rng, params)
 """
 
@@ -36,18 +36,27 @@ F_INTERNAL = 10000
 # Component → noise-family bucket
 PERIODIC_KEYS = ('ac', 'pt', 'resonance')
 WHITE_KEYS = ('colored', 'white')
-ALL_KEYS = PERIODIC_KEYS + WHITE_KEYS
+ALL_KEYS = ('ac', 'pt', 'colored', 'white', 'resonance')
 
 
 def sample_noise_params(rng: np.random.Generator,
                         noise_rms: float = 7.5e-3) -> dict:
-    """Sample randomized noise parameters for one window.
+    """Sample legacy noise parameters, including the original per-window RMS."""
+    rms_scale = rng.uniform(0.5, 1.5)
+    target_rms = noise_rms * rms_scale
+    params = _sample_noise_params(rng, target_rms, pt_range=(0.2, 0.8))
+    return {'target_rms': target_rms, 'rms_scale': rms_scale, **params}
 
-    target_rms is fixed (= noise_rms); window-level amplitude variation is
-    introduced separately by the `scale` factor in generate_paired_noise().
-    """
-    target_rms = noise_rms
 
+def sample_paired_noise_params(rng: np.random.Generator,
+                               noise_rms: float = 7.5e-3) -> dict:
+    """Sample paired-mode parameters with fixed family RMS and saved color scale."""
+    params = _sample_noise_params(rng, noise_rms, pt_range=(0.3, 1.0))
+    params['colored_target'] = noise_rms * rng.uniform(0.3, 1.0)
+    return params
+
+
+def _sample_noise_params(rng, target_rms, pt_range):
     # 1/f^alpha parameters
     alpha = rng.uniform(0.8, 1.2)
     f_cross = rng.uniform(0.5, 3.0)
@@ -62,13 +71,13 @@ def sample_noise_params(rng: np.random.Generator,
     return {
         # Overall
         'target_rms': target_rms,
-        # AC harmonics (50 Hz) — same uniform range as PT for matched scale
+        # AC harmonics (50 Hz)
         'ac_a_base': target_rms * rng.uniform(0.3, 1.0),
         'ac_p_decay': rng.uniform(1.0, 2.0),
         'ac_n_harmonics': 20,
         # PT cooler harmonics (1.4 Hz)
         'pt_freq': 1.4 + rng.uniform(-0.05, 0.05),
-        'pt_a_base': target_rms * rng.uniform(0.3, 1.0),
+        'pt_a_base': target_rms * rng.uniform(*pt_range),
         'pt_p_decay': rng.uniform(1.0, 2.0),
         'pt_n_harmonics': 50,
         # Colored noise
@@ -83,8 +92,6 @@ def sample_noise_params(rng: np.random.Generator,
         'resonances': sample_resonance_params(rng, target_rms),
         # Envelope
         'envelope_variation': rng.uniform(0.0, 0.2),
-        # Colored target (sampled here so paired calls use the same value)
-        'colored_target': target_rms * rng.uniform(0.3, 1.0),
     }
 
 
@@ -128,9 +135,12 @@ def generate_components(rng: np.random.Generator,
         a_lin=params['a_lin'],
         a_white=params['a_white'],
     )
+    colored_target = params.get('colored_target')
+    if colored_target is None:
+        colored_target = params['target_rms'] * rng.uniform(0.3, 1.0)
     std_colored = np.std(colored)
     if std_colored > 0:
-        colored = colored / std_colored * params['colored_target']
+        colored = colored / std_colored * colored_target
 
     white = rng.standard_normal(n_internal) * params['white_rms']
 
@@ -191,11 +201,7 @@ def generate_noise(rng: np.random.Generator,
                    f_sample: float = 1000.0,
                    f_bessel: float = 120.0,
                    bessel_order: int = 6) -> np.ndarray:
-    """Generate one combined-noise window (all components summed, no mix scale).
-
-    Kept as a back-compat helper for QA scripts. New training/inference
-    pipelines should use generate_paired_noise().
-    """
+    """Generate one legacy window from parameters sampled by sample_noise_params()."""
     comps = generate_components(rng, params, duration=duration)
     return _assemble(comps, ALL_KEYS, params,
                      duration=duration, f_sample=f_sample,
@@ -213,6 +219,8 @@ def generate_paired_noise(rng: np.random.Generator,
                           scale: float = None
                           ) -> tuple:
     """Generate paired (periodic, white, total) noise from one component draw.
+
+    Use sample_paired_noise_params() for the paired parameter distribution.
 
     Mixing
     ------

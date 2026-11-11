@@ -65,6 +65,10 @@ def main():
                         help='Weight for ASD ratio loss (J_asd)')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint .pt file to resume from')
+    parser.add_argument('--preload', action='store_true',
+                        help='Preload clean and noise waveforms into RAM')
+    parser.add_argument('--patience', type=int, default=0,
+                        help='Early stopping after N epochs without improvement (0=disabled)')
     parser.add_argument('--amp', action='store_true',
                         help='Enable mixed precision training (float16)')
     parser.add_argument('--compile', action='store_true',
@@ -99,7 +103,8 @@ def main():
 
     # Dataset
     print("Loading dataset...")
-    dataset = PulseNoiseDataset(args.clean_dir, args.noise_dir, subset=args.subset)
+    dataset = PulseNoiseDataset(args.clean_dir, args.noise_dir,
+                                subset=args.subset, preload=args.preload)
     if args.subset:
         print(f"Subset filter: '{args.subset}' -> {len(dataset)} samples")
     n_total = len(dataset)
@@ -162,6 +167,7 @@ def main():
     # Resume from checkpoint
     start_epoch = 1
     best_val_loss = float('inf')
+    epochs_no_improve = 0
     history = {'train_loss': [], 'val_loss': [], 'lr': [],
                'step_loss': [], 'step_num': []}
     global_step = 0
@@ -297,12 +303,17 @@ def main():
         # Save best
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            epochs_no_improve = 0
             torch.save(raw_model.state_dict(),
                        os.path.join(args.output_dir, 'best_model.pt'))
             print(f"  -> New best val_loss: {val_loss:.6f}")
 
-        # Periodic checkpoint
-        if epoch % args.save_every == 0:
+        else:
+            epochs_no_improve += 1
+        should_stop = args.patience > 0 and epochs_no_improve >= args.patience
+
+        # Periodic checkpoint, or save the final epoch when stopping early.
+        if epoch % args.save_every == 0 or should_stop:
             torch.save({
                 'epoch': epoch,
                 'global_step': global_step,
@@ -357,6 +368,10 @@ def main():
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'loss_curve.png'), dpi=150)
         plt.close()
+
+        if should_stop:
+            print(f"  -> Early stopping: no improvement for {args.patience} epochs.")
+            break
 
     print(f"\nTraining complete. Best val_loss: {best_val_loss:.6f}")
     print(f"Output: {args.output_dir} | Total steps: {global_step}")

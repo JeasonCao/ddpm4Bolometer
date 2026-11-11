@@ -4,7 +4,7 @@ Compare two DDPM models on the same deterministic pileup QA samples.
 For each model, loads its training schedule (beta_1, beta_T, cond_mode) from
 the config.json next to best_model.pt, so the reverse process matches training.
 Runs deterministic 1-shot inference (no per-step noise) and fits each output
-with triexp_double, plotting side-by-side overlays for the same indices.
+with the project fitter, plotting side-by-side overlays for the same indices.
 
 Initial x_T is drawn from a fixed torch seed so both models see the same
 starting random tensor for each sample — the only differences in the outputs
@@ -41,7 +41,7 @@ from src.ddpm.unet import UNet1D
 from src.ddpm.diffusion import GaussianDiffusion
 from src.ddpm.dataset import PulseNoiseDataset
 from src.basics.fit import (
-    fit_pulse, triexp_double,
+    fit_pulse,
     _TAU_R_MIN, _TAU_R_MAX, _TAU_D_MIN, _TAU_D_MAX,
 )
 
@@ -205,12 +205,13 @@ def main():
             sig = e['signals'][src]
             fr = e['fits'][src]
             ax.plot(t, sig * 1e3, 'k-', lw=0.5, alpha=0.7, label='data')
-            fit_curve = triexp_double(t, *fr.params)
-            is_bad, why = (False, '')
+            is_bad, why = rail_hit(fr)
             if src in e['bad']:
                 is_bad, why = e['bad'][src]
             fit_color = 'red' if is_bad else 'tab:blue'
-            ax.plot(t, fit_curve * 1e3, color=fit_color, lw=0.9, label='fit')
+            if fr.success and fr.model_fn is not None:
+                fit_curve = fr.model_fn(t, *fr.params)
+                ax.plot(t, fit_curve * 1e3, color=fit_color, lw=0.9, label='fit')
             status = f'X {why}' if is_bad else 'ok'
             title_color = 'red' if is_bad else 'black'
             ax.set_title(f"{col_names[src]}  chi2/ndf={fr.chi2_per_ndf:.2e}\n{status}",

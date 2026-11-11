@@ -4,6 +4,22 @@ Realistic synthetic noise generator for CUORE cryogenic bolometer signals, model
 
 The components are split into two **noise families** — *periodic* and *white* — so we can ablate the DDPM denoiser's behavior on each independently while still training on a realistic mix.
 
+## Choose a generation mode
+
+The default `legacy` mode keeps the existing per-window parameter draws and
+single-file HDF5 layout. Each window sums all noise components and is scaled
+to its sampled target RMS (`noise_rms * U(0.5, 1.5)`). Files contain `waveforms`
+and `params`. Existing training and holdout files can be reused.
+
+```bash
+python -u scripts/generate_noise_shards.py --output_dir /path/to/legacy_test_noise \
+    --n_shards 1 --windows_per_shard 500 --base_seed 99999
+```
+
+Choose `--mode paired` for the periodic/white/total design described below.
+Use a separate output directory for a new noise set. `--n_channels` explicitly
+selects the paired channel-bank layout.
+
 ## Noise families
 
 | Family | Components | Typical signature |
@@ -90,7 +106,7 @@ Per-window mix metadata `(alpha, beta, r, scale, target_rms)` is returned so the
 
 ## Parameter sampling
 
-Each noise window gets independently sampled parameters via `sample_noise_params()`. `target_rms` is now **fixed** at `noise_rms` (default 7.5 mV); all level variation comes from the `scale` factor in `generate_paired_noise`. Key randomized quantities:
+In paired flat mode, each window gets parameters via `sample_paired_noise_params()`. `target_rms` is now **fixed** at `noise_rms` (default 7.5 mV); all level variation comes from the `scale` factor in `generate_paired_noise`. Key randomized quantities:
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
@@ -127,7 +143,7 @@ noise_total[i] = mix_scale[i] * (mix_alpha[i] * noise_periodic[i]
                                  + mix_beta[i] * noise_white[i])
 ```
 
-Training uses `noise_total/`; ablation studies point `--noise_dir` at `noise_periodic/` or `noise_white/`.
+Paired-mode training uses `noise_total/`; ablation studies point `--noise_dir` at `noise_periodic/` or `noise_white/`.
 
 ## Structure
 
@@ -143,20 +159,20 @@ src/noise/
 
 ## Usage
 
-### Paired generation (used by the shard pipeline)
+### Paired generation (`--mode paired`)
 
 ```python
-from src.noise.generator import sample_noise_params, generate_paired_noise
+from src.noise.generator import sample_paired_noise_params, generate_paired_noise
 import numpy as np
 
 rng = np.random.default_rng(42)
-params = sample_noise_params(rng)
+params = sample_paired_noise_params(rng)
 periodic, white, total, meta = generate_paired_noise(rng, params)
 # periodic.shape == white.shape == total.shape == (10000,)
 # meta = {'alpha', 'beta', 'r', 'scale', 'target_rms'}
 ```
 
-### Single combined window (back-compat for QA)
+### Legacy combined window (default)
 
 ```python
 from src.noise.generator import sample_noise_params, generate_noise
@@ -169,7 +185,7 @@ noise = generate_noise(rng, params)        # all components summed, no scale
 
 For the foundation-model denoiser, noise is organized into **channels**: each
 channel is one shard whose noise **identity is fixed** — the PSD parameters from
-`sample_noise_params`, *and* the periodic/white mix `r` and overall `scale`
+`sample_paired_noise_params`, *and* the periodic/white mix `r` and overall `scale`
 (drawn once per channel). Only the random **realization** of each component
 varies per window. One channel ↔ one shard (`noise_NNN.h5`), matching the clean
 bank's `channel_id == shard index`.

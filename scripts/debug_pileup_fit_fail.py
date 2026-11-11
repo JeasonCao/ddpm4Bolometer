@@ -1,8 +1,8 @@
 """
-TEMP debug script — investigate pileup windows where tri-exp fitting fails.
+TEMP debug script — investigate pileup windows where tri-exponential fitting fails.
 
 Runs DDPM inference on a handful of pileup samples, fits clean/noisy/1-shot/
-10-shot with triexp_double, flags any fit that (a) raised in curve_fit or
+10-shot with the project fitter, flags any fit that (a) failed or
 (b) rail-pinned a tau bound, and plots data+fit overlay for the bad windows.
 Prints best-fit params, the parameter bounds, and chi2/ndf to stdout.
 
@@ -33,8 +33,8 @@ from src.ddpm.unet import UNet1D
 from src.ddpm.diffusion import GaussianDiffusion
 from src.ddpm.dataset import PulseNoiseDataset
 from src.basics.fit import (
-    fit_pulse, triexp_single, triexp_double,
-    _TAU_R_MIN, _TAU_R_MAX, _TAU_D_MIN, _TAU_D_MAX,
+    fit_pulse,
+    _TAU_R_MIN, _TAU_R_MAX, _TAU_D_MIN, _TAU_D_MAX, _TAU_CONSTRAINT,
 )
 
 
@@ -88,16 +88,10 @@ def main():
     indices = rng.choice(pool, size=min(args.n_pileup, len(pool)), replace=False)
     print(f"Selected {len(indices)} pileup samples from pool of {len(pool)}")
 
-    # Parameter bounds (print once). Pileup model: 10 params total
-    # (B fixed, t01 fixed, shared tau_r/tau_d1/tau_d2; per-pulse A, alpha; t02).
-    print(f"\nFit parameter bounds (tri-exp pileup, 10 params):")
-    print(f"  B      fixed = mean(signal[:1500])")
-    print(f"  t01    fixed = 1.5 s")
-    print(f"  A_i    in [0, 2.0] V")
-    print(f"  alpha  in [0.01, 0.99]")
-    print(f"  t02    in [t01+0.01, t01+2.0] s")
-    print(f"  tau_r  in [{_TAU_R_MIN*1e3:.1f}, {_TAU_R_MAX*1e3:.1f}] ms")
-    print(f"  tau_d1 in [{_TAU_D_MIN*1e3:.1f}, {_TAU_D_MAX*1e3:.1f}] ms")
+    print("\nSequential tri-exp pileup fit (13 stored parameters):")
+    print(f"  Pulse 2 rise time within ±{100 * _TAU_CONSTRAINT:.0f}% of pulse 1")
+    print(f"  Global rise bounds: [{_TAU_R_MIN*1e3:.1f}, {_TAU_R_MAX*1e3:.1f}] ms")
+    print(f"  Global decay bounds: [{_TAU_D_MIN*1e3:.1f}, {_TAU_D_MAX*1e3:.1f}] ms")
 
     # Denoise + fit each pileup sample
     entries = []  # list of dicts with fits and signals
@@ -182,12 +176,13 @@ def main():
             sig = e['signals'][src]
             fr = e['fits'][src]
             ax.plot(t, sig * 1e3, 'k-', lw=0.5, alpha=0.7, label='data')
-            fit_curve = triexp_double(t, *fr.params)
-            is_bad, why = (False, '')
+            is_bad, why = rail_hit(fr)
             if src in e['bad']:
                 is_bad, why = e['bad'][src]
             fit_color = 'red' if is_bad else 'tab:blue'
-            ax.plot(t, fit_curve * 1e3, color=fit_color, lw=0.9, label='fit')
+            if fr.success and fr.model_fn is not None:
+                fit_curve = fr.model_fn(t, *fr.params)
+                ax.plot(t, fit_curve * 1e3, color=fit_color, lw=0.9, label='fit')
             status = f'❌ {why}' if is_bad else 'ok'
             title_color = 'red' if is_bad else 'black'
             ax.set_title(f"{col_names[src]}  chi2/ndf={fr.chi2_per_ndf:.2e}\n{status}",
