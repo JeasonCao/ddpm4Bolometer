@@ -42,3 +42,61 @@ Full-range completion: all 34 fits are available (32 computed locally, 2 priorit
 `spectral_diagnostics.py --notes-root PATH --output PATH` adds the 7.5 mV / 15--50 keV peak-and-tail panels. The full comparison also includes 1.382 mV / 2 keV and 7.5 mV / 10 keV outlier spectra: the canonical full-range and robust-core Gaussian widths disagree strongly. Hollow plot markers flag Gaussian spectrum chi2/ndf > 10 only as a visual diagnostic; this neither removes events nor changes the stored waveform-quality gate. Do not interpret these low-energy Gaussian widths as a complete performance measure.
 
 To automatically plot after fitting, pass `full_comparison.py --wait-for-fit-manifest PATH/fit_manifest.json`; it verifies all 34 fit hashes, or exits if fitting fails or the wait timeout is exceeded. Final audit records, source alignment, statistics and all six PNG/PDF figure pairs are stored with the results. No new OF filtering, old-model inference, cloud start or automatic Git commit is part of this analysis.
+
+## Revised calibration and waveform diagnostics (2026-11-13)
+
+The later user agreement (2026-09-22, rechecked against the original conversation)
+takes precedence over the former blanket calibration statement above. Full-range
+resolution and reconstructed-energy figures use 239/511/727/1461/2615 keV;
+low-energy reconstruction acceptance uses all available lines <=511 keV.
+Each before/after pair shares the denoised-derived slope. The four-method overlay
+uses the new-model slope for its single raw reference and labels it explicitly.
+
+- `recalibrate.py --notes-root PATH --source-report PATH --output PATH` preserves
+  previous results, reuses saved peak fits, fixes the raw reference, adds paired
+  before/after plots and low-energy acceptance. Acceptance means successful finite
+  amplitudes within 5% of truth, with all 5,000 windows in the denominator; no
+  waveform chi-square cut or new DT-trigger calculation.
+- `waveform_tail_diagnostics.py --data-root PATH --notes-root PATH --comparison PATH --output PATH`
+  reconstructs saved tri-exponential curves and reads actual input/output waveforms.
+  It inspects 2/5 keV at 1.382 mV and 10/15/20/25/30/50 keV at 7.5 mV, 5,000 each.
+  It adds 2615-keV examples at chi-square P50/P95 with clean-template controls.
+  No event waveform refitting, OF run or inference is performed.
+- `diagnostic_summary.py --output PATH` adds high-energy closeups, a compact
+  low-energy overview and fixed truth-based peak-deficit counts. It checks sampled
+  noise reuse across energies/groups and records the sampled rows.
+- `validate_analysis.py --notes-root PATH` verifies the source/code hashes,
+  unchanged old/new/OF widths, shared raw calibration, independently reproduced
+  efficiency counts, diagnostic row/amplitude/group identity and PNG/PDF pairs.
+
+The energy-defined display groups come from a descriptive two-Gaussian mixture:
+high-mean peak core within 2 sigma with posterior >=0.9; low tail below mu-3 sigma;
+all other events remain gray. They never become a production event selection.
+Three-component BIC is better in all eight cases, so two physical populations are
+not established. Group sizes cannot be compared as fixed failure rates across
+energies; the separate 10%-below-clean-peak diagnostic has a common definition.
+
+Evidence: fitted/direct peak ranks correlate above 0.998 at 2/10 keV; tails already
+exist in actual output waveforms, with broader/slower rises and suppressed peaks.
+Core/tail rise medians are 55.5/108.0 ms and 56.5/106.4 ms respectively; decay
+constants change much less. Reconstructed energy correlates with input 1--20 Hz
+noise fraction (-0.494/-0.472) and noise projection onto the clean shape
+(+0.625/+0.650). The latter is an unweighted diagnostic, not OF. This is association,
+not a causal separation of architecture, loss, normalization and sampler.
+The 200-ms rise band is the existing fit bound. At a fixed energy the source
+uses one clean template, so fitted-parameter scatter is not a physical ODE spread.
+
+The 2615-keV clean-template fit has 0.759 mV RMS residual; 94.46% of its squared
+residual is in 1.49--1.52 s. Similar residual structure appears in model outputs
+while baseline noise is much smaller, explaining why solver success and the
+old chi-square gate disagree. This does not prove the OF resolution gap is
+entirely caused by the fitting model. The canonical fitter and gate stay unchanged.
+
+Results are independent directories under the notes vault's `results/plots/`:
+`model261108_recalibrated_20261113` (8 PNG/PDF pairs) and
+`model261108_tail_diagnostics_20261113` (60 pairs, per-event NPZ, CSV, JSON,
+source/row/hash provenance, and a Chinese reading guide). Validation passed for
+40,000 diagnostic rows, 136 method/energy rows and 106 source/code hashes.
+Original inputs and old result directories are retained. All code runs on local
+CPU using the existing analysis dependencies. This work does not change deployed
+workers or cloud resources.
