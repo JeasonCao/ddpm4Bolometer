@@ -25,4 +25,12 @@ Update diary for substantive work and the unique TODO for actions. Distinguish i
 
 Commit/push only when authorized. Review explicit staged paths; avoid `git add .`. Do not commit secrets, installed dependencies, caches, logs or data. Keep scientific changes separate from organization. Long GPU/cloud/full runs require existing authorization. Do not contact collaborators unless explicitly asked.
 
+## Standing commit authorization (2026-11-13)
+
+The user authorizes automatic local commits after each coherent task's code changes are finished and appropriate checks pass. Do not ask again solely for permission to commit. A commit should represent a completed change, not each individual file save.
+
+Include only reviewed code and documentation for the current task; leave other tasks' changes untouched. Do not treat pending user decisions or failed/incomplete checks as ready for a completion commit. Preserve the explicit-path staging and data-exclusion rules above.
+
+Record the change and validation in the project diary, and report the commit hash. Push remains manual unless separately requested. This standing authorization does not authorize upstream fetch/pull/merge or additional experiments.
+
 For 2026-11-10, user authorized two local commits and will push manually. No upstream fetch/pull/merge is authorized. Inventory/mapping/limitations are in docs/reorganization_20261110/.
