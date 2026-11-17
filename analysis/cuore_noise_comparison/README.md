@@ -60,3 +60,11 @@ Primary references: https://arxiv.org/html/2607.02548v1 (release, 2500-point bas
 ## Artifacts and checks
 
 Per-event RMS conversion, RMS summaries (including matched windows), PSD/band tables, cross-AP baseline estimates and held-out amplitudes, window sensitivity, 34000 direct-time rows/68 summaries, common-energy comparisons, four PNG/PDF figure pairs, offline Chinese report, manifest and independent verification. Audit recomputes all direct-time summaries, baseline-estimator SDs and unit-response checks; source IDs and all CUORE baseline RMS values are validated. No claim that these checks validate the official detector model.
+
+## Baseline offset groups and window structure
+
+`plot_baseline_groups.py --data CUORE_DIR --features CALIBRATED_FEATURES_CSV --output RESULT_DIR --plots PLOT_DIR` plots the baseline-offset distribution of the existing 5000 single-event identities (including the previous 20 flagged fit cases). It independently verifies each first-2500-sample mean, stored normalizationOffset, event ID, group threshold, and available training labels against the raw files. Test identities inherit the prior selection because the public test file has no Labels.
+
+A is offset > -70000 ADC (2716 events), B is offset <= -70000 ADC (2284). Median offsets are -62730.347 / -75023.539 ADC; central 68% intervals are [-63539.192,-62526.438] / [-76681.518,-71737.634]. A and especially B have internal structure: neither should be assumed to be one Gaussian population. The split lies in an empty gap; it does not establish two physical operating states. Baseline offset across events is distinct from noise RMS within a window.
+
+Raw shapes are training (9000,10000), test (1000,10000). The release describes 1-kHz, 10-s triggered event windows, rise midpoint near 3 s, with possible repeated pile-up pulses across windows. They are not consecutive nonoverlapping stream blocks. The public file fields contain event IDs but no absolute acquisition timestamps; concatenation cannot reconstruct a continuous stream. The release explicitly states one dataset-calorimeter, so A/B should not be interpreted as two detectors. Output figure: `05_baseline_offset_groups.png/pdf`; per-event CSV and summary JSON include verification and hashes.
